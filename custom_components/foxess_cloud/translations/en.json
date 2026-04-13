@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Fox ESS Cloud",
+        "description": "Enter your Fox ESS Cloud API key. You can generate one from your Fox ESS Cloud account under User Profile → API Management.",
+        "data": {
+          "api_key": "API Key"
+        }
+      },
+      "device": {
+        "title": "Select Device",
+        "description": "Select the inverter you want to monitor.",
+        "data": {
+          "device_sn": "Inverter"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to Fox ESS Cloud",
+      "invalid_auth": "Invalid API key",
+      "no_devices": "No devices found for this API key",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This device is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Fox ESS Cloud Options",
+        "data": {
+          "scan_interval": "Update interval (minutes)"
+        }
+      }
+    }
+  }
+}
