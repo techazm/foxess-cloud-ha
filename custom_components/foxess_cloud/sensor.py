@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -24,6 +25,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import StateType
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .coordinator import FoxESSCloudCoordinator
@@ -35,6 +37,7 @@ class FoxESSSensorDescription(SensorEntityDescription):
     """Describe a Fox ESS sensor."""
 
     value_fn: Callable[[dict[str, Any]], StateType] | None = None
+    is_daily_reset: bool = False  # True for daily report sensors that reset at midnight
 
 
 def _rt(variable: str) -> Callable[[dict[str, Any]], StateType]:
@@ -321,54 +324,60 @@ REPORT_SENSORS: tuple[FoxESSSensorDescription, ...] = (
         name="Daily Generation",
         icon="mdi:solar-power",
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        state_class=SensorStateClass.TOTAL,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         value_fn=_rpt("generation"),
+        is_daily_reset=True,
     ),
     FoxESSSensorDescription(
         key="daily_feedin",
         name="Daily Feed-in",
         icon="mdi:transmission-tower-export",
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        state_class=SensorStateClass.TOTAL,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         value_fn=_rpt("feedin"),
+        is_daily_reset=True,
     ),
     FoxESSSensorDescription(
         key="daily_grid_consumption",
         name="Daily Grid Consumption",
         icon="mdi:transmission-tower-import",
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        state_class=SensorStateClass.TOTAL,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         value_fn=_rpt("gridConsumption"),
+        is_daily_reset=True,
     ),
     FoxESSSensorDescription(
         key="daily_load",
         name="Daily Load",
         icon="mdi:home-lightning-bolt",
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        state_class=SensorStateClass.TOTAL,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         value_fn=_rpt("loads"),
+        is_daily_reset=True,
     ),
     FoxESSSensorDescription(
         key="daily_bat_charge",
         name="Daily Battery Charge",
         icon="mdi:battery-plus",
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        state_class=SensorStateClass.TOTAL,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         value_fn=_rpt("chargeEnergyToTal"),
+        is_daily_reset=True,
     ),
     FoxESSSensorDescription(
         key="daily_bat_discharge",
         name="Daily Battery Discharge",
         icon="mdi:battery-minus",
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        state_class=SensorStateClass.TOTAL,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         value_fn=_rpt("dischargeEnergyToTal"),
+        is_daily_reset=True,
     ),
 )
 
@@ -432,6 +441,13 @@ class FoxESSSensorEntity(FoxESSEntity, SensorEntity):
         """Initialize sensor."""
         super().__init__(coordinator, description.key)
         self.entity_description = description
+
+    @property
+    def last_reset(self) -> datetime | None:
+        """Return midnight local time for daily report sensors."""
+        if self.entity_description.is_daily_reset:
+            return dt_util.start_of_local_day()
+        return None
 
     @property
     def native_value(self) -> StateType:
