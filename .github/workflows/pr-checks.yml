@@ -39,8 +39,6 @@ jobs:
             revert
             security
           requireScope: false
-            The subject "{subject}" should start with a lowercase letter,
-            e.g. "feat: add booking reminders".
 
   actionlint:
     name: actionlint
