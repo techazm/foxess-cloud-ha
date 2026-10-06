@@ -12,3 +12,52 @@ venv/
 *.log
 .DS_Store
 Thumbs.db
+
+# --- Security baseline (repo hygiene) ---
+# Secrets and credentials: never commit these. Use *.example files for templates.
+.env.*
+*.env
+!.env.example
+!*.env.example
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.mobileprovision
+*.kdbx
+id_rsa*
+id_ecdsa*
+id_ed25519*
+credentials.json
+*service-account*.json
+*-sa-key.json
+secrets.yaml
+secrets.yml
+secrets.json
+.npmrc
+.pypirc
+.netrc
+.htpasswd
+
+# Local tooling and agent state
+.claude/settings.local.json
+CLAUDE.local.md
+*.local.md
+
+# OS and editor noise
+desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# Python
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
