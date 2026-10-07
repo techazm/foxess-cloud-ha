@@ -1,0 +1,19 @@
+# Weekly dependency updates. Minor and patch bumps are grouped into one PR per
+# ecosystem/directory; majors arrive one per PR so they can be reviewed alone.
+# Titles use Conventional Commits so the PR-title check passes.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: chore(deps)
+    labels: [dependencies]

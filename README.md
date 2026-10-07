@@ -282,3 +282,11 @@ Fox ESS brand images from the [HA brands repository](https://github.com/home-ass
 ## License
 
 [MIT](LICENSE)
+## Development workflow
+
+[![CI](https://github.com/techazm/foxess-cloud-ha/actions/workflows/ci.yml/badge.svg)](https://github.com/techazm/foxess-cloud-ha/actions/workflows/ci.yml)
+[![Security](https://github.com/techazm/foxess-cloud-ha/actions/workflows/security.yml/badge.svg)](https://github.com/techazm/foxess-cloud-ha/actions/workflows/security.yml)
+
+Changes land on `main` through pull requests with green checks (CI, secret scan,
+Conventional Commit title). See [CONTRIBUTING.md](CONTRIBUTING.md) for branching,
+commit style and local checks, and [SECURITY.md](SECURITY.md) to report a vulnerability.
