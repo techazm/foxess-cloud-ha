@@ -1,0 +1,53 @@
+# Monthly list of dependencies with a new MAJOR version, across every ecosystem
+# (GitHub Actions, npm, Docker images, Terraform providers, Python packages).
+# Dependabot only proposes patch/minor updates (see dependabot.yml), so majors are
+# upgraded deliberately. This keeps one issue up to date with what is waiting and
+# closes it once nothing is.
+name: Dependency report
+
+on:
+  schedule:
+    - cron: '41 21 1 * *' # 1st of the month, 08:41 Sydney (AEDT)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  majors:
+    name: dependency-report
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Find new majors
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/dependency-report.py > "$RUNNER_TEMP/majors.md"
+      - name: Open, update or close the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: 'Major dependency updates available'
+        run: |
+          num=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$TITLE\" in:title" --json number --jq '.[0].number // empty')
+          if [ ! -s "$RUNNER_TEMP/majors.md" ]; then
+            if [ -n "$num" ]; then gh issue close "$num" --repo "$GITHUB_REPOSITORY" --comment "No new majors as of $(date -u +%Y-%m-%d)."; fi
+            exit 0
+          fi
+          {
+            echo 'These dependencies have a new major version. Majors do not come as Dependabot PRs, so each needs a deliberate upgrade: read the changelog, bump, test.'
+            echo
+            cat "$RUNNER_TEMP/majors.md"
+            echo
+            echo "Last checked: $(date -u +%Y-%m-%d) ([run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID))"
+          } > "$RUNNER_TEMP/body.md"
+          if [ -n "$num" ]; then
+            gh issue edit "$num" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --label dependencies --body-file "$RUNNER_TEMP/body.md"
+          fi
