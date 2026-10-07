@@ -1,19 +1,31 @@
-# Weekly dependency updates. Minor and patch bumps are grouped into one PR per
-# ecosystem/directory; majors arrive one per PR so they can be reviewed alone.
-# Titles use Conventional Commits so the PR-title check passes.
+# Dependabot: at most one routine PR per day.
+#
+# - Version updates (patch and minor) for every ecosystem and folder are bundled into a
+#   single daily PR by the `daily` multi-ecosystem group.
+# - Security updates open as soon as an advisory lands, grouped to one PR per folder.
+#   They can need a major bump: check CI before merging.
+# - Majors never open PRs. Upgrade them deliberately.
 version: 2
+
+multi-ecosystem-groups:
+  daily:
+    schedule:
+      interval: daily
+      time: '07:00'
+      timezone: Australia/Sydney
+    labels: [dependencies]
+    commit-message:
+      prefix: chore(deps)
+
 updates:
   - package-ecosystem: github-actions
     directory: /
-    schedule:
-      interval: weekly
-      day: monday
-      time: "08:00"
-      timezone: Australia/Sydney
-    open-pull-requests-limit: 5
+    multi-ecosystem-group: daily
+    patterns: ['*']
     groups:
-      minor-and-patch:
-        update-types: [minor, patch]
-    commit-message:
-      prefix: chore(deps)
-    labels: [dependencies]
+      security:
+        applies-to: security-updates
+        patterns: ['*']
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
