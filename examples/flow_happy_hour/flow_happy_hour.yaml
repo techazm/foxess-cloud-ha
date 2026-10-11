@@ -12,7 +12,7 @@
 #   sensor.fox_ess_60kb103062cb096_daily_grid_consumption  import today (kWh)
 #   sensor.fox_ess_60kb103062cb096_daily_load              house load today (kWh)
 #   button.fox_ess_60kb103062cb096_refresh_all_data
-#   sensor.solcast_pv_forecast_forecast_tomorrow           tomorrow's PV forecast (kWh), optional.
+#   sensor.energy_production_tomorrow           tomorrow's PV forecast (kWh), optional.
 #     Solcast (HACS) or Forecast.Solar (built-in: sensor.energy_production_tomorrow).
 #     If the sensor is missing or unavailable, no poor-solar extra is added and
 #     the 10c top-up isn't blocked by the forecast.
@@ -64,7 +64,7 @@ template:
           {% set morn   = states('input_number.hh_morning_buffer_kwh') | float(2) %}
           {% set margin = states('input_number.hh_reserve_margin_pct') | float(15) / 100 %}
           {% set floor  = states('input_number.hh_floor_soc') | float(10) %}
-          {% set fc     = 'sensor.solcast_pv_forecast_forecast_tomorrow' %}
+          {% set fc     = 'sensor.energy_production_tomorrow' %}
           {% set poor   = has_value(fc) and states(fc) | float(0) < states('input_number.hh_poor_solar_kwh') | float(30) %}
           {% set extra  = states('input_number.hh_poor_solar_extra_kwh') | float(5) if poor else 0 %}
           {% set kwh = (night + morn) * (1 + margin) + extra %}
@@ -129,7 +129,7 @@ automation:
           title: Happy Hour armed
           message: >
             Cut-off {{ states('sensor.hh_reserve_soc') }}%, SoC now {{ states('sensor.fox_ess_60kb103062cb096_battery_soc') }}%,
-            solar tomorrow {{ states('sensor.solcast_pv_forecast_forecast_tomorrow') if has_value('sensor.solcast_pv_forecast_forecast_tomorrow') else 'no forecast' }} kWh.
+            solar tomorrow {{ states('sensor.energy_production_tomorrow') if has_value('sensor.energy_production_tomorrow') else 'no forecast' }} kWh.
 
   # 17:29 - pull fresh daily totals so pre-17:30 solar export isn't counted in the window
   - id: hh_pre_window_refresh
@@ -155,7 +155,7 @@ automation:
       - if:
           - condition: template
             value_template: >
-              {% set fc = 'sensor.solcast_pv_forecast_forecast_tomorrow' %}
+              {% set fc = 'sensor.energy_production_tomorrow' %}
               {{ states('sensor.hh_surplus_kwh') | float(0) < states('input_number.hh_surplus_min_kwh') | float(3)
                  or (has_value(fc) and states(fc) | float(0) < states('input_number.hh_poor_solar_kwh') | float(30)) }}
         then:
