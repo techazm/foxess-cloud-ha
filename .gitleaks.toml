@@ -1,0 +1,4 @@
+# gitleaks configuration: default rules plus repo-specific allowlist.
+# Only allowlist values that are verifiably not secrets, and say why.
+[extend]
+useDefault = true

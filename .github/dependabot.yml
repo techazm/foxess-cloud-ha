@@ -1,0 +1,32 @@
+# Dependabot: at most one routine PR per day.
+#
+# - Version updates (patch and minor) for every ecosystem and folder are bundled into a
+#   single daily PR by the `daily` multi-ecosystem group.
+# - Security updates open as soon as an advisory lands, grouped to one PR per folder.
+#   They can need a major bump: check CI before merging.
+# - Majors never open PRs. .github/workflows/dependency-report.yml lists them in one
+#   monthly issue so they are upgraded deliberately.
+version: 2
+
+multi-ecosystem-groups:
+  daily:
+    schedule:
+      interval: daily
+      time: '07:00'
+      timezone: Australia/Sydney
+    labels: [dependencies]
+    commit-message:
+      prefix: chore(deps)
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    multi-ecosystem-group: daily
+    patterns: ['*']
+    groups:
+      security:
+        applies-to: security-updates
+        patterns: ['*']
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']

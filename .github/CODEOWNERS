@@ -1,0 +1,7 @@
+# Code owners are requested for review on every pull request.
+# Docs: https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+* @techazm @azmukhtar
+
+# CI, ownership and security policy
+/.github/ @techazm @azmukhtar
+/SECURITY.md @techazm @azmukhtar
