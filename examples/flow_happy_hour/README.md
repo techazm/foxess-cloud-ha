@@ -27,7 +27,7 @@ Cloud API budget: 2 schedule writes/day (4 calls each) + 1 forced refresh. Well 
 1. Update the `foxess_cloud` integration to 1.1.1 and restart HA.
 2. Copy `flow_happy_hour.yaml` to `config/packages/` and enable packages.
 3. Check the entity IDs at the top of the YAML match yours (they assume device name *Fox ESS 60KB103062CB096*).
-4. Install Solcast PV Forecast (HACS), or point the template at your own forecast sensor.
+4. Optional: add a PV forecast. Easiest is the built-in **Forecast.Solar** integration (Settings -> Devices & services -> Add -> Forecast.Solar), then replace `sensor.solcast_pv_forecast_forecast_tomorrow` with `sensor.energy_production_tomorrow`. Solcast (HACS) is more accurate. Without a forecast the package still works; it just can't hold extra back before cloudy days.
 5. In **Developer Tools -> Actions**, run `foxess_cloud.get_schedule` (Return response) and confirm `properties` lists `fdsoc`/`fdpwr`/`secondworkmode`. On a KH10, `fd_pwr` max is 10500 W and SoC fields can't go below 10%.
 6. Turn on `input_boolean.hh_dry_run` and `input_boolean.hh_enabled`, watch the notifications for 2-3 days, then turn dry run off.
 
@@ -49,6 +49,7 @@ Around April, switch back to a plan with a free midday window and turn off `hh_e
 - Flow Power API (price signals and actual Happy Hour kWh to reconcile against the local counter). Add once the API fields are confirmed.
 
 ## Changelog
+- 2026-10-11 - v1.3: PV forecast is optional; a missing/unavailable forecast no longer counts as a poor solar day (it was adding ~13% to the reserve).
 - 2026-10-11 - v1.2: Force Discharge falls back to Self-use after the cut-off (`second_work_mode`); floor SoC minimum raised to 10% to match the inverter.
 - 2026-10-11 - v1.1: wired to `foxess_cloud.set_schedule`; real entity IDs; never-resetting load/import meters for overnight learning; pre-window refresh.
 - 2026-10-11 - v1: reserve-based cut-off, 35c cap handling, overnight learning, import alerts, dry-run mode.
