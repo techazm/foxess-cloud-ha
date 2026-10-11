@@ -243,23 +243,24 @@ data:
   groups:
     - { start: "00:00", end: "17:29", work_mode: SelfUse, min_soc_on_grid: 10 }
     - { start: "17:30", end: "21:29", work_mode: ForceDischarge,
-        min_soc_on_grid: 10, fd_soc: 40, fd_pwr: 5500 }
+        min_soc_on_grid: 10, fd_soc: 40, fd_pwr: 5500, second_work_mode: SelfUse }
     - { start: "21:30", end: "23:59", work_mode: SelfUse, min_soc_on_grid: 10 }
 ```
 
 | Field | Notes |
 |-------|-------|
-| `work_mode` | `SelfUse`, `Feedin`, `Backup`, `ForceCharge`, `ForceDischarge` |
+| `work_mode` | `SelfUse`, `Feedin`, `Backup`, `ForceCharge`, `ForceDischarge`, `ForceCharge(BAT)`, `ForceDischarge(BAT)` (checked against the inverter's list) |
 | `min_soc_on_grid` | Always sent |
 | `fd_soc`, `fd_pwr` | Force modes only: discharge cut-off SoC (%) and power (W) |
+| `second_work_mode` | Force modes only: what runs after the cut-off is reached (`SelfUse`, `Feedin`, `Backup`, `Standby`). Defaults to `SelfUse` for ForceDischarge so the house keeps running from the battery |
 | `max_soc`, `import_limit`, `export_limit`, `pv_limit` | Sent only if your inverter advertises them |
 | `device_sn` | Needed only with more than one inverter |
 
-Unsupported fields are dropped with a log warning rather than sent (the v3 API rejects them). Each call uses 2 API calls to write plus 2 to re-read.
+Unsupported fields are dropped with a log warning rather than sent (the v3 API rejects them). Values outside the ranges the inverter advertises (e.g. KH10: `fd_pwr` 0–10500 W, SoC fields 10–100%) are rejected before anything is written. Each call uses 2 API calls to write plus 2 to re-read.
 
 ### `foxess_cloud.get_schedule`
 
-Returns the live schedule (`enabled`, `groups`, `max_groups`, `properties`). Call it from **Developer Tools → Actions** with *Return response*.
+Returns the live schedule (`enabled`, `groups`, `max_groups`, `properties`). The inverter also reports its *Remaining Time Mode* as a 00:00–23:59 group; it's flagged `remaining_time_mode: true` here and on the Mode Scheduler sensor. Call it from **Developer Tools → Actions** with *Return response*.
 
 ---
 
@@ -322,6 +323,12 @@ Go to **Settings → Devices & Services → Fox ESS Cloud → ⋮ → Download d
 ---
 
 ## Changelog
+
+### 1.1.1 (2026-10-11)
+- **Fix:** Force Discharge groups now send `secondWorkMode` (default `SelfUse`). Without it the after-cut-off behaviour was left to the inverter's default.
+- **New:** `second_work_mode` field; `ForceCharge(BAT)` / `ForceDischarge(BAT)` work modes.
+- **New:** values and work modes are validated against the inverter's advertised `properties` before writing.
+- The Remaining Time Mode group is flagged `remaining_time_mode` in `get_schedule` and the Mode Scheduler sensor.
 
 ### 1.1.0 (2026-10-11)
 - **New:** `foxess_cloud.set_schedule` / `foxess_cloud.get_schedule` services (Mode Scheduler, Open API v3) and a *Mode Scheduler* sensor.

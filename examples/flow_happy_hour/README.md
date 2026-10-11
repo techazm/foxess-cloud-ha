@@ -1,6 +1,6 @@
 # Flow Power Happy Hour optimiser (Home Assistant)
 
-Maximises Flow Power Happy Hour earnings on a FoxESS KH10 + CQ6 (~38 kWh usable) without buying power back overnight. Uses the `foxess_cloud` integration (>= 1.1.0) in this repo.
+Maximises Flow Power Happy Hour earnings on a FoxESS KH10 + CQ6 (~38 kWh usable) without buying power back overnight. Uses the `foxess_cloud` integration (>= 1.1.1) in this repo.
 
 ## Tariff it optimises for (Endeavour, Oct 2026)
 | Item | Rate |
@@ -24,11 +24,11 @@ Cloud API budget: 2 schedule writes/day (4 calls each) + 1 forced refresh. Well 
 **Granularity:** daily feed-in comes from the cloud report (~15 min), so the cap can overshoot by about 1 kWh. That energy sells at 10c and the reserve cut-off still holds, so the cost is small.
 
 ## Setup
-1. Update the `foxess_cloud` integration to 1.1.0 and restart HA.
+1. Update the `foxess_cloud` integration to 1.1.1 and restart HA.
 2. Copy `flow_happy_hour.yaml` to `config/packages/` and enable packages.
 3. Check the entity IDs at the top of the YAML match yours (they assume device name *Fox ESS 60KB103062CB096*).
 4. Install Solcast PV Forecast (HACS), or point the template at your own forecast sensor.
-5. In **Developer Tools -> Actions**, run `foxess_cloud.get_schedule` (Return response) and confirm `properties` lists `fdsoc`/`fdpwr`.
+5. In **Developer Tools -> Actions**, run `foxess_cloud.get_schedule` (Return response) and confirm `properties` lists `fdsoc`/`fdpwr`/`secondworkmode`. On a KH10, `fd_pwr` max is 10500 W and SoC fields can't go below 10%.
 6. Turn on `input_boolean.hh_dry_run` and `input_boolean.hh_enabled`, watch the notifications for 2-3 days, then turn dry run off.
 
 ## Tuning
@@ -49,5 +49,6 @@ Around April, switch back to a plan with a free midday window and turn off `hh_e
 - Flow Power API (price signals and actual Happy Hour kWh to reconcile against the local counter). Add once the API fields are confirmed.
 
 ## Changelog
+- 2026-10-11 - v1.2: Force Discharge falls back to Self-use after the cut-off (`second_work_mode`); floor SoC minimum raised to 10% to match the inverter.
 - 2026-10-11 - v1.1: wired to `foxess_cloud.set_schedule`; real entity IDs; never-resetting load/import meters for overnight learning; pre-window refresh.
 - 2026-10-11 - v1: reserve-based cut-off, 35c cap handling, overnight learning, import alerts, dry-run mode.

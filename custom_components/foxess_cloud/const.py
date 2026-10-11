@@ -55,7 +55,12 @@ REPORT_VARIABLES = [
 WORK_MODES = ["SelfUse", "Backup", "Feedin", "PeakShaving"]
 
 # Mode Scheduler (Open API v3)
-SCHEDULER_WORK_MODES = ["SelfUse", "Feedin", "Backup", "ForceCharge", "ForceDischarge"]
+SCHEDULER_WORK_MODES = [
+    "SelfUse", "Feedin", "Backup",
+    "ForceCharge", "ForceDischarge", "ForceCharge(BAT)", "ForceDischarge(BAT)",
+]
+# What a Force period falls back to once fd_soc / max_soc is reached
+SECOND_WORK_MODES = ["SelfUse", "Feedin", "Backup", "Standby"]
 # Service field -> Open API extraParam key. Keys are only sent if the inverter
 # advertises them in the v3 scheduler "properties" (matched case-insensitively).
 SCHEDULER_EXTRA_PARAMS = {
@@ -63,6 +68,7 @@ SCHEDULER_EXTRA_PARAMS = {
     "max_soc": "maxSoc",
     "fd_soc": "fdSoc",
     "fd_pwr": "fdPwr",
+    "second_work_mode": "secondWorkMode",
     "import_limit": "importLimit",
     "export_limit": "exportLimit",
     "pv_limit": "pvLimit",
