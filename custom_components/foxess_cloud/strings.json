@@ -51,7 +51,7 @@
         },
         "groups": {
           "name": "Groups",
-          "description": "List of time groups. Each group has start, end, work_mode and optional min_soc_on_grid, max_soc, fd_soc, fd_pwr, import_limit, export_limit, pv_limit. work_mode: SelfUse, Feedin, Backup, ForceCharge or ForceDischarge."
+          "description": "List of time groups. Each group has start, end, work_mode and optional min_soc_on_grid, max_soc, fd_soc, fd_pwr, second_work_mode, import_limit, export_limit, pv_limit. work_mode: SelfUse, Feedin, Backup, ForceCharge, ForceDischarge, ForceCharge(BAT) or ForceDischarge(BAT)."
         }
       }
     },

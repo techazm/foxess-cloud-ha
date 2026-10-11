@@ -30,6 +30,7 @@ from homeassistant.util import dt as dt_util
 from .const import DOMAIN
 from .coordinator import FoxESSCloudCoordinator
 from .entity import FoxESSEntity
+from .services import is_remaining_time_group
 
 
 @dataclass(frozen=True)
@@ -499,5 +500,6 @@ def _fmt_group(group: dict[str, Any]) -> dict[str, Any]:
         "start": f"{int(group.get('startHour', 0)):02d}:{int(group.get('startMinute', 0)):02d}",
         "end": f"{int(group.get('endHour', 0)):02d}:{int(group.get('endMinute', 0)):02d}",
         "work_mode": group.get("workMode"),
+        "remaining_time_mode": is_remaining_time_group(group),
         **(group.get("extraParam") or {}),
     }

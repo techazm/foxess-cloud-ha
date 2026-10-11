@@ -21,12 +21,13 @@ from .const import (
     LOGGER,
     SCHEDULER_EXTRA_PARAMS,
     SCHEDULER_WORK_MODES,
+    SECOND_WORK_MODES,
     SERVICE_GET_SCHEDULE,
     SERVICE_SET_SCHEDULE,
 )
 from .coordinator import FoxESSCloudCoordinator
 
-FORCE_ONLY = {"fd_soc", "fd_pwr"}
+FORCE_ONLY = {"fd_soc", "fd_pwr", "second_work_mode"}
 ALWAYS_SENT = {"min_soc_on_grid"}  # core field, not listed in v3 "properties"
 
 
@@ -51,6 +52,7 @@ GROUP_SCHEMA = vol.Schema(
         vol.Optional("max_soc"): vol.All(vol.Coerce(int), vol.Range(0, 100)),
         vol.Optional("fd_soc"): vol.All(vol.Coerce(int), vol.Range(0, 100)),
         vol.Optional("fd_pwr"): vol.All(vol.Coerce(int), vol.Range(0, 30000)),
+        vol.Optional("second_work_mode"): vol.In(SECOND_WORK_MODES),
         vol.Optional("import_limit"): vol.All(vol.Coerce(int), vol.Range(0, 100000)),
         vol.Optional("export_limit"): vol.All(vol.Coerce(int), vol.Range(0, 100000)),
         vol.Optional("pv_limit"): vol.All(vol.Coerce(int), vol.Range(0, 100000)),
@@ -85,6 +87,26 @@ def _coordinator(hass: HomeAssistant, device_sn: str | None) -> FoxESSCloudCoord
     )
 
 
+def _check_range(field: str, value: Any, prop: Any) -> None:
+    """Reject values outside the range the inverter advertises."""
+    rng = prop.get("range") if isinstance(prop, dict) else None
+    if not rng or not isinstance(value, (int, float)):
+        return
+    lo, hi = rng.get("min"), rng.get("max")
+    if (lo is not None and value < lo) or (hi is not None and value > hi):
+        raise ServiceValidationError(f"{field}={value} outside inverter range {lo}-{hi}")
+
+
+def is_remaining_time_group(group: dict[str, Any]) -> bool:
+    """The inverter reports its Remaining Time Mode as a 00:00-23:59 group."""
+    return (
+        int(group.get("startHour", -1)) == 0
+        and int(group.get("startMinute", -1)) == 0
+        and int(group.get("endHour", -1)) == 23
+        and int(group.get("endMinute", -1)) == 59
+    )
+
+
 def build_groups(
     groups: list[dict[str, Any]],
     properties: dict[str, Any],
@@ -110,7 +132,16 @@ def build_groups(
         spans.append((start, end))
 
         mode = group["work_mode"]
+        modes = (properties.get("workmode") or {}).get("enumList")
+        if modes and mode not in modes:
+            raise ServiceValidationError(f"work_mode {mode} not supported; inverter accepts {modes}")
         extra: dict[str, Any] = {}
+        if mode.startswith("ForceDischarge") and "second_work_mode" not in group and (
+            not properties or "secondworkmode" in properties
+        ):
+            # Explicit fallback after fd_soc is reached, so the inverter never
+            # drops into Standby and imports while the battery still has charge
+            group = {**group, "second_work_mode": "SelfUse"}
         for field, api_key in SCHEDULER_EXTRA_PARAMS.items():
             if field not in group:
                 continue
@@ -120,6 +151,7 @@ def build_groups(
             if properties and field not in ALWAYS_SENT and api_key.lower() not in properties:
                 LOGGER.warning("Dropping %s: not supported by this inverter", field)
                 continue
+            _check_range(field, group[field], properties.get(api_key.lower()))
             extra[api_key] = group[field]
 
         out.append(
@@ -162,7 +194,10 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         return {
             "enabled": str(flag.get("enable")) in ("1", "True", "true"),
             "max_groups": sched.get("maxGroupCount"),
-            "groups": sched.get("groups") or [],
+            "groups": [
+                {**g, "remaining_time_mode": is_remaining_time_group(g)}
+                for g in sched.get("groups") or []
+            ],
             "properties": sched.get("properties") or {},
         }
 
