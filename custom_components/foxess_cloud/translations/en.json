@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Fox ESS Cloud",
-        "description": "Enter your Fox ESS Cloud API key. You can generate one from your Fox ESS Cloud account under User Profile → API Management.",
+        "description": "Enter your Fox ESS Cloud API key. You can generate one from your Fox ESS Cloud account under User Profile \u2192 API Management.",
         "data": {
           "api_key": "API Key"
         }
@@ -32,6 +32,36 @@
         "title": "Fox ESS Cloud Options",
         "data": {
           "scan_interval": "Update interval (minutes)"
+        }
+      }
+    }
+  },
+  "services": {
+    "set_schedule": {
+      "name": "Set mode schedule",
+      "description": "Replace the inverter's Mode Scheduler time groups. Times are local HH:MM, end inclusive (e.g. 17:30-21:29). Time not covered falls back to the Remaining Time Mode.",
+      "fields": {
+        "device_sn": {
+          "name": "Inverter SN",
+          "description": "Required only if more than one inverter is configured."
+        },
+        "enable": {
+          "name": "Enable scheduler",
+          "description": "Turn the Mode Scheduler on (default) or off after writing."
+        },
+        "groups": {
+          "name": "Groups",
+          "description": "List of time groups. Each group has start, end, work_mode and optional min_soc_on_grid, max_soc, fd_soc, fd_pwr, import_limit, export_limit, pv_limit. work_mode: SelfUse, Feedin, Backup, ForceCharge or ForceDischarge."
+        }
+      }
+    },
+    "get_schedule": {
+      "name": "Get mode schedule",
+      "description": "Read the inverter's current Mode Scheduler groups and supported parameters.",
+      "fields": {
+        "device_sn": {
+          "name": "Inverter SN",
+          "description": "Required only if more than one inverter is configured."
         }
       }
     }

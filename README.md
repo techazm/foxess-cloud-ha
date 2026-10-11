@@ -17,6 +17,7 @@ A modern Home Assistant custom integration for [Fox ESS Cloud](https://www.foxes
 - **40+ Sensors** — Real-time power, PV strings 1–4, grid, load, battery, phase R/S/T, temperatures, generation totals.
 - **Battery Controls** — Adjust Min SoC and Min SoC on Grid via sliders.
 - **Work Mode Select** — Switch between SelfUse, Backup, Feedin, and PeakShaving.
+- **Mode Scheduler services** — Read and write the inverter's time-of-day schedule (Self-use, Force Discharge, Force Charge…) from automations.
 - **Refresh Button** — Force an immediate full data refresh.
 - **Options Flow** — Change the polling interval without reconfiguring.
 - **HA Device Registry** — All entities grouped under a single device with model and firmware info.
@@ -79,6 +80,8 @@ Before installing, you need a **Fox ESS Cloud API key**:
            ├── number.py
            ├── select.py
            ├── sensor.py
+           ├── services.py
+           ├── services.yaml
            ├── strings.json
            └── translations/
                └── en.json
@@ -122,6 +125,14 @@ All entities are grouped under a single device in the HA device registry (e.g., 
 | Min SoC on Grid | Number (slider) | Battery minimum SoC when grid is available (10–100%) |
 | Work Mode | Select | SelfUse / Backup / Feedin / PeakShaving |
 | Refresh All Data | Button | Force immediate refresh of all data from Fox ESS Cloud |
+
+> **Work Mode vs Mode Scheduler:** while the Mode Scheduler is enabled it overrides the Work Mode select. Use the services below to change scheduled behaviour.
+
+### Mode Scheduler
+
+| Entity | Description |
+|--------|-------------|
+| Mode Scheduler (sensor) | `enabled` / `disabled`; attribute `groups` lists the current time groups. Refreshed hourly and after every write. |
 
 ### Sensors — Real-time Power
 
@@ -220,6 +231,38 @@ Go to **Settings → Dashboards → Energy** and configure:
 
 ---
 
+## Services
+
+### `foxess_cloud.set_schedule`
+
+Replaces **all** Mode Scheduler groups (Open API v3), then turns the scheduler on (or off with `enable: false`). Times are local `HH:MM`; `end` is inclusive, as shown in the Fox app (e.g. `17:30`–`21:29`). Groups can't cross midnight or overlap. Time not covered by a group falls back to the inverter's *Remaining Time Mode*.
+
+```yaml
+action: foxess_cloud.set_schedule
+data:
+  groups:
+    - { start: "00:00", end: "17:29", work_mode: SelfUse, min_soc_on_grid: 10 }
+    - { start: "17:30", end: "21:29", work_mode: ForceDischarge,
+        min_soc_on_grid: 10, fd_soc: 40, fd_pwr: 5500 }
+    - { start: "21:30", end: "23:59", work_mode: SelfUse, min_soc_on_grid: 10 }
+```
+
+| Field | Notes |
+|-------|-------|
+| `work_mode` | `SelfUse`, `Feedin`, `Backup`, `ForceCharge`, `ForceDischarge` |
+| `min_soc_on_grid` | Always sent |
+| `fd_soc`, `fd_pwr` | Force modes only: discharge cut-off SoC (%) and power (W) |
+| `max_soc`, `import_limit`, `export_limit`, `pv_limit` | Sent only if your inverter advertises them |
+| `device_sn` | Needed only with more than one inverter |
+
+Unsupported fields are dropped with a log warning rather than sent (the v3 API rejects them). Each call uses 2 API calls to write plus 2 to re-read.
+
+### `foxess_cloud.get_schedule`
+
+Returns the live schedule (`enabled`, `groups`, `max_groups`, `properties`). Call it from **Developer Tools → Actions** with *Return response*.
+
+---
+
 ## API Rate Limits
 
 Fox ESS allows **1440 API calls per day per inverter**. This integration uses staggered polling to stay well within that limit:
@@ -228,8 +271,10 @@ Fox ESS allows **1440 API calls per day per inverter**. This integration uses st
 |------|---------------|---------------------------|
 | Real-time data | Every cycle | ~288 |
 | Device detail + Reports | Every 3rd cycle (~15 min) | ~192 |
-| Battery SOC + Generation + Work Mode | Every 12th cycle (~60 min) | ~72 |
-| **Total** | | **~552** |
+| Battery SOC + Generation + Work Mode + Scheduler | Every 12th cycle (~60 min) | ~120 |
+| **Total** | | **~600** |
+
+Schedule writes add 4 calls each.
 
 This leaves plenty of headroom. If you increase the polling interval (e.g., to 10 minutes), the daily call count drops proportionally.
 
@@ -261,6 +306,8 @@ Go to **Settings → Devices & Services → Fox ESS Cloud → ⋮ → Download d
 | Rate limit error (40400) | Reduce the polling interval in the integration options, or wait until the daily limit resets at midnight. |
 | "Device does not exist" (41930) | The inverter serial number doesn't match your account. Remove and re-add the integration. |
 | Energy dashboard shows wrong values on first day | This is normal. Accurate tracking starts from the next full day. |
+| Entities go *Unavailable* briefly | The real-time poll failed (cloud outage or rate limit). Entities recover on the next successful poll; stale values are no longer shown as live. |
+| `set_schedule` fails with 40257 | A parameter isn't accepted for that work mode. Run `get_schedule` and check `properties`. |
 
 ### API Error Codes
 
@@ -273,6 +320,19 @@ Go to **Settings → Devices & Services → Fox ESS Cloud → ⋮ → Download d
 | 41930 | Device does not exist or belongs to another account |
 
 ---
+
+## Changelog
+
+### 1.1.0 (2026-10-11)
+- **New:** `foxess_cloud.set_schedule` / `foxess_cloud.get_schedule` services (Mode Scheduler, Open API v3) and a *Mode Scheduler* sensor.
+- **Fix:** daily report totals used the container clock (`datetime.now()`), which is UTC in most Docker installs — after local midnight they showed yesterday's totals until UTC rolled over. Now uses HA's configured timezone.
+- **Fix:** daily energy sensors' `last_reset` now follows the date of the cached report, so the Energy dashboard can't count yesterday's total again just after midnight.
+- **Fix:** a failed real-time poll now marks entities unavailable (and `online` false) instead of serving stale values as current.
+- **Fix:** options flow no longer assigns `config_entry` explicitly (breaks on HA 2025.12+); uses `ConfigFlowResult`.
+- **Fix:** API calls are serialised with a lock so polls and writes can't break the 1 s spacing.
+
+### 1.0.0
+- Initial release.
 
 ## Credits
 

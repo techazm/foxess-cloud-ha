@@ -411,7 +411,24 @@ GENERATION_SENSORS: tuple[FoxESSSensorDescription, ...] = (
     ),
 )
 
-ALL_SENSORS = REALTIME_SENSORS + REPORT_SENSORS + GENERATION_SENSORS
+def _schedule_state(data: dict[str, Any]) -> StateType:
+    """Scheduler on/off from the v1 flag."""
+    enable = data.get("scheduler_flag", {}).get("enable")
+    if enable is None:
+        return None
+    return "enabled" if str(enable) in ("1", "True", "true") else "disabled"
+
+
+SCHEDULER_SENSORS: tuple[FoxESSSensorDescription, ...] = (
+    FoxESSSensorDescription(
+        key="mode_scheduler",
+        name="Mode Scheduler",
+        icon="mdi:calendar-clock",
+        value_fn=_schedule_state,
+    ),
+)
+
+ALL_SENSORS = REALTIME_SENSORS + REPORT_SENSORS + GENERATION_SENSORS + SCHEDULER_SENSORS
 
 
 async def async_setup_entry(
@@ -444,10 +461,15 @@ class FoxESSSensorEntity(FoxESSEntity, SensorEntity):
 
     @property
     def last_reset(self) -> datetime | None:
-        """Return midnight local time for daily report sensors."""
-        if self.entity_description.is_daily_reset:
-            return dt_util.start_of_local_day()
-        return None
+        """Midnight of the day the cached report totals belong to.
+
+        Tied to the report's date, not "today": after midnight the old totals
+        stay under yesterday's last_reset until the next report poll, so the
+        Energy dashboard never counts yesterday's total again as today's.
+        """
+        if not self.entity_description.is_daily_reset:
+            return None
+        return dt_util.start_of_local_day(self.coordinator.report_date)
 
     @property
     def native_value(self) -> StateType:
@@ -458,3 +480,24 @@ class FoxESSSensorEntity(FoxESSEntity, SensorEntity):
             return self.entity_description.value_fn(self.coordinator.data or {})
         except (KeyError, TypeError, ValueError):
             return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Expose scheduler groups on the Mode Scheduler sensor."""
+        if self.entity_description.key != "mode_scheduler":
+            return None
+        sched = (self.coordinator.data or {}).get("scheduler", {})
+        return {
+            "groups": [_fmt_group(g) for g in sched.get("groups") or []],
+            "max_groups": sched.get("maxGroupCount"),
+        }
+
+
+def _fmt_group(group: dict[str, Any]) -> dict[str, Any]:
+    """Compact, readable scheduler group."""
+    return {
+        "start": f"{int(group.get('startHour', 0)):02d}:{int(group.get('startMinute', 0)):02d}",
+        "end": f"{int(group.get('endHour', 0)):02d}:{int(group.get('endMinute', 0)):02d}",
+        "work_mode": group.get("workMode"),
+        **(group.get("extraParam") or {}),
+    }

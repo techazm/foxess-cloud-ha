@@ -38,6 +38,8 @@ class FoxESSEntity(CoordinatorEntity[FoxESSCloudCoordinator]):
 
     @property
     def available(self) -> bool:
-        """Return if entity is available."""
-        # Stay available as long as the coordinator has returned data at least once
-        return self.coordinator.data is not None
+        """Available only while the last poll succeeded.
+
+        Stale cloud data must not look live to automations (e.g. battery SoC).
+        """
+        return super().available and self.coordinator.data is not None

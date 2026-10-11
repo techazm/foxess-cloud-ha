@@ -1,13 +1,14 @@
 """Data update coordinator for Fox ESS Cloud."""
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
-from .api import FoxESSCloudApi, FoxESSCloudApiError, FoxESSRateLimitError
+from .api import FoxESSCloudApi
 from .const import (
     DEFAULT_SCAN_INTERVAL,
     LOGGER,
@@ -22,7 +23,7 @@ class FoxESSCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     Base interval (configurable, default 5 min): real-time data
     Every 3rd poll (~15 min): report data + device detail
-    Every 12th poll (~60 min): battery SOC settings, generation, work mode
+    Every 12th poll (~60 min): battery SOC settings, generation, work mode, scheduler
     """
 
     def __init__(
@@ -43,9 +44,12 @@ class FoxESSCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "device_detail": {},
             "realtime": {},
             "report": {},
+            "report_date": None,
             "generation": {},
             "battery_soc": {},
             "work_mode": {},
+            "scheduler": {},
+            "scheduler_flag": {},
             "online": False,
         }
 
@@ -76,13 +80,31 @@ class FoxESSCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Check if the device is online."""
         return self._data.get("online", False)
 
+    @property
+    def report_date(self) -> date | None:
+        """Local date the cached daily report totals belong to."""
+        return self._data.get("report_date")
+
+    @property
+    def scheduler_properties(self) -> dict[str, Any]:
+        """Scheduler parameters the inverter supports (lower-case keys)."""
+        props = self._data.get("scheduler", {}).get("properties") or {}
+        return {str(k).lower(): v for k, v in props.items()}
+
+    @property
+    def scheduler_max_groups(self) -> int | None:
+        """Max scheduler groups the inverter accepts, if known."""
+        value = self._data.get("scheduler", {}).get("maxGroupCount")
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from API with staggered intervals."""
         self._poll_count += 1
         try:
             await self._fetch_data(force_all=self._force_full)
-        except Exception as err:
-            LOGGER.error("Unexpected error during data fetch: %s", err)
         finally:
             self._force_full = False
         return self._data
@@ -92,64 +114,74 @@ class FoxESSCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._force_full = True
         await self.async_refresh()
 
+    async def async_refresh_scheduler(self) -> None:
+        """Re-read the scheduler after a write and notify listeners."""
+        try:
+            self._data["scheduler"] = await self.api.get_scheduler(self.device_sn)
+            self._data["scheduler_flag"] = await self.api.get_scheduler_flag(
+                self.device_sn
+            )
+        except Exception as err:  # noqa: BLE001
+            LOGGER.warning("Error re-reading scheduler: %s", err)
+        self.async_set_updated_data(self._data)
+
     async def _fetch_data(self, force_all: bool = False) -> None:
-        """Fetch data sections. If force_all, fetch everything regardless of interval."""
+        """Fetch data sections. If force_all, fetch everything regardless of interval.
+
+        Real-time data is mandatory: if it fails the update fails, so entities go
+        unavailable instead of silently serving stale SoC/power to automations.
+        Slower sections keep their last good value on error.
+        """
         # ── Always: real-time data ──
         try:
             realtime = await self.api.get_real_time_data(
                 self.device_sn, variables=REALTIME_VARIABLES
             )
-            self._data["realtime"] = realtime
-            self._data["online"] = True
-
-            # Parse running state safely
-            running_state = realtime.get("runningState")
-            if running_state is not None:
-                try:
-                    state_val = int(float(running_state))
-                    self._data["online"] = state_val in (163, 164)
-                    self._data["realtime"]["runningStateText"] = RUNNING_STATES.get(
-                        state_val, f"Unknown ({state_val})"
-                    )
-                except (ValueError, TypeError):
-                    LOGGER.warning("Could not parse runningState: %s", running_state)
         except Exception as err:
-            LOGGER.warning("Error fetching real-time data: %s", err)
+            self._data["online"] = False
+            raise UpdateFailed(f"Error fetching real-time data: {err}") from err
+
+        self._data["realtime"] = realtime
+        self._data["online"] = True
+        running_state = realtime.get("runningState")
+        if running_state is not None:
+            try:
+                state_val = int(float(running_state))
+                self._data["online"] = state_val in (163, 164)
+                self._data["realtime"]["runningStateText"] = RUNNING_STATES.get(
+                    state_val, f"Unknown ({state_val})"
+                )
+            except (ValueError, TypeError):
+                LOGGER.warning("Could not parse runningState: %s", running_state)
 
         # ── Every 3rd poll (~15 min) or forced: report data + device detail ──
         if force_all or self._poll_count % 3 == 1:
             try:
                 detail = await self.api.get_device_detail(self.device_sn)
                 self._data["device_detail"] = detail
-            except Exception as err:
+            except Exception as err:  # noqa: BLE001
                 LOGGER.warning("Error fetching device detail: %s", err)
 
             try:
+                today = dt_util.now().date()
                 report = await self.api.get_report_data(
-                    self.device_sn, variables=REPORT_VARIABLES
+                    self.device_sn, variables=REPORT_VARIABLES, day=today
                 )
                 self._data["report"] = report
-            except Exception as err:
+                self._data["report_date"] = today
+            except Exception as err:  # noqa: BLE001
                 LOGGER.warning("Error fetching report data: %s", err)
 
-        # ── Every 12th poll (~60 min) or forced: battery, generation, work mode ──
+        # ── Every 12th poll (~60 min) or forced: battery, generation, work mode, scheduler ──
         if force_all or self._poll_count % 12 == 1:
-            try:
-                battery = await self.api.get_battery_soc(self.device_sn)
-                self._data["battery_soc"] = battery
-            except Exception as err:
-                LOGGER.warning("Error fetching battery SOC: %s", err)
-
-            try:
-                generation = await self.api.get_generation(self.device_sn)
-                self._data["generation"] = generation
-            except Exception as err:
-                LOGGER.warning("Error fetching generation data: %s", err)
-
-            try:
-                work_mode = await self.api.get_device_setting(
-                    self.device_sn, "WorkMode"
-                )
-                self._data["work_mode"] = work_mode
-            except Exception as err:
-                LOGGER.warning("Error fetching work mode: %s", err)
+            for key, call in (
+                ("battery_soc", lambda: self.api.get_battery_soc(self.device_sn)),
+                ("generation", lambda: self.api.get_generation(self.device_sn)),
+                ("work_mode", lambda: self.api.get_device_setting(self.device_sn, "WorkMode")),
+                ("scheduler", lambda: self.api.get_scheduler(self.device_sn)),
+                ("scheduler_flag", lambda: self.api.get_scheduler_flag(self.device_sn)),
+            ):
+                try:
+                    self._data[key] = await call()
+                except Exception as err:  # noqa: BLE001
+                    LOGGER.warning("Error fetching %s: %s", key, err)
