@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import time
-from datetime import datetime
+from datetime import date
 from typing import Any
 
 import aiohttp
@@ -18,6 +18,10 @@ from .const import (
     ENDPOINT_GENERATION,
     ENDPOINT_REAL_QUERY,
     ENDPOINT_REPORT_QUERY,
+    ENDPOINT_SCHEDULER_ENABLE,
+    ENDPOINT_SCHEDULER_FLAG_GET,
+    ENDPOINT_SCHEDULER_FLAG_SET,
+    ENDPOINT_SCHEDULER_GET,
     ENDPOINT_SETTING_GET,
     ENDPOINT_SETTING_SET,
     LOGGER,
@@ -52,6 +56,7 @@ class FoxESSCloudApi:
         self._session = session
         self._api_key = api_key
         self._last_request_time: float = 0
+        self._lock = asyncio.Lock()
 
     @staticmethod
     def _md5(text: str) -> str:
@@ -61,11 +66,12 @@ class FoxESSCloudApi:
     def _build_headers(self, path: str) -> dict[str, str]:
         """Build request headers with signature."""
         timestamp = str(round(time.time() * 1000))
+        # Fox ESS signs with a literal backslash-r-backslash-n separator, not CRLF.
         signature_text = f"{path}\\r\\n{self._api_key}\\r\\n{timestamp}"
         signature = self._md5(signature_text)
         return {
             "Content-Type": "application/json",
-            "User-Agent": "FoxESSCloud-HA/1.0.0",
+            "User-Agent": "FoxESSCloud-HA/1.1.0",
             "token": self._api_key,
             "timestamp": timestamp,
             "signature": signature,
@@ -73,9 +79,8 @@ class FoxESSCloudApi:
         }
 
     async def _rate_limit(self) -> None:
-        """Enforce minimum 1-second gap between requests."""
-        now = time.time()
-        elapsed = now - self._last_request_time
+        """Enforce minimum 1-second gap between requests (call under self._lock)."""
+        elapsed = time.time() - self._last_request_time
         if elapsed < 1.0:
             await asyncio.sleep(1.0 - elapsed)
         self._last_request_time = time.time()
@@ -87,11 +92,22 @@ class FoxESSCloudApi:
         params: dict[str, Any] | None = None,
         body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Make an API request."""
-        await self._rate_limit()
+        """Make an API request (serialised so coordinator polls and writes never overlap)."""
+        async with self._lock:
+            await self._rate_limit()
+            data = await self._send(method, path, params, body)
+        return self._check(method, path, data)
+
+    async def _send(
+        self,
+        method: str,
+        path: str,
+        params: dict[str, Any] | None,
+        body: dict[str, Any] | None,
+    ) -> Any:
+        """Send the HTTP request and return decoded JSON."""
         url = f"{BASE_URL}{path}"
         headers = self._build_headers(path)
-
         try:
             if method == "GET":
                 async with self._session.get(
@@ -110,8 +126,12 @@ class FoxESSCloudApi:
             raise FoxESSConnectionError(f"Connection error: {err}") from err
         except asyncio.TimeoutError as err:
             raise FoxESSConnectionError("Request timed out") from err
+        return data
 
-        if data is None:
+    @staticmethod
+    def _check(method: str, path: str, data: Any) -> dict[str, Any]:
+        """Validate the API envelope and map error codes to exceptions."""
+        if not isinstance(data, dict):
             raise FoxESSCloudApiError("Empty response from API")
 
         LOGGER.debug("API %s %s -> errno=%s, keys=%s", method, path, data.get("errno"), list(data.keys()) if isinstance(data, dict) else type(data))
@@ -186,9 +206,15 @@ class FoxESSCloudApi:
         sn: str,
         variables: list[str] | None = None,
         dimension: str = "day",
+        day: date | None = None,
     ) -> dict[str, float]:
-        """Get report data (daily totals) for a device."""
-        today = datetime.now()
+        """Get report data (daily totals) for a device.
+
+        Pass `day` in the plant's local timezone. datetime.now() follows the
+        container clock, which is UTC in most HA Docker installs and would
+        return yesterday's totals until 10-11am in Australia.
+        """
+        today = day or date.today()
         body: dict[str, Any] = {
             "sn": sn,
             "year": today.year,
@@ -264,4 +290,43 @@ class FoxESSCloudApi:
         """Set a device setting (e.g., WorkMode)."""
         body = {"sn": sn, "key": setting, "value": value}
         await self._request("POST", ENDPOINT_SETTING_SET, body=body)
+        return True
+
+    # ── Mode Scheduler (Open API v3) ──────────────────────
+
+    async def get_scheduler(self, sn: str) -> dict[str, Any]:
+        """Get scheduler groups, supported properties and max group count."""
+        data = await self._request(
+            "POST", ENDPOINT_SCHEDULER_GET, body={"deviceSN": sn}
+        )
+        result = data.get("result", {})
+        return result if isinstance(result, dict) else {}
+
+    async def get_scheduler_flag(self, sn: str) -> dict[str, Any]:
+        """Get scheduler enable/support flags."""
+        data = await self._request(
+            "POST", ENDPOINT_SCHEDULER_FLAG_GET, body={"deviceSN": sn}
+        )
+        result = data.get("result", {})
+        return result if isinstance(result, dict) else {}
+
+    async def set_scheduler(
+        self, sn: str, groups: list[dict[str, Any]], enable: bool = True
+    ) -> bool:
+        """Replace all scheduler groups, then set the scheduler on/off flag.
+
+        Each group: startHour, startMinute, endHour, endMinute (inclusive),
+        workMode, extraParam{...}. Uncovered time falls back to the inverter's
+        Remaining Time Mode.
+        """
+        await self._request(
+            "POST",
+            ENDPOINT_SCHEDULER_ENABLE,
+            body={"deviceSN": sn, "isDefault": False, "groups": groups},
+        )
+        await self._request(
+            "POST",
+            ENDPOINT_SCHEDULER_FLAG_SET,
+            body={"deviceSN": sn, "enable": 1 if enable else 0},
+        )
         return True
