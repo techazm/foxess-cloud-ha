@@ -1,0 +1,135 @@
+# Flow Power (kWatch) wholesale price + PEA sensors for Home Assistant
+# Optional companion to flow_happy_hour.yaml: when present, Happy Hour holds
+# extra reserve before overnight price spikes and blocks grid import while
+# force discharging through a spike.
+#
+# Setup: Flow Power app -> More -> Web Data Access -> enable the API key.
+# Add to secrets.yaml (never commit these):
+#   flow_power_api_key: "<your key>"
+#   flow_power_summary_payload: '{"nmi":"<your NMI>"}'
+#
+# API notes (https://api.kwatch.com.au/api/v1/<method>, POST, header x-api-key):
+#   - responses are a JSON *string* containing JSON, hence `value_json | from_json`
+#   - prices are $/MWh (divide by 1000 for $/kWh)
+#   - timestamps are NEM time (+10:00) and mark the END of each interval
+#   - PEA figures are c/kWh; negative = cheaper than average (good)
+
+input_number:
+  flow_spike_threshold:
+    name: Flow price spike threshold
+    min: 0.3
+    max: 20
+    step: 0.1
+    initial: 1.0
+    unit_of_measurement: "$/kWh"
+
+rest:
+  # Current 5-min dispatch price
+  - resource: https://api.kwatch.com.au/api/v1/dispatch5mins
+    method: POST
+    headers:
+      x-api-key: !secret flow_power_api_key
+      Content-Type: application/json
+    payload: '{"regName":"nsw","period":5}'
+    scan_interval: 300
+    sensor:
+      - name: Flow price now
+        unique_id: flow_price_now
+        unit_of_measurement: "$/kWh"
+        state_class: measurement
+        value_template: >
+          {% set d = value_json | from_json %}
+          {{ (d[-1].Value / 1000) | round(3) if d else none }}
+
+  # 30-min pre-dispatch forecast, next 24 h
+  - resource: https://api.kwatch.com.au/api/v1/predispatch30mins
+    method: POST
+    headers:
+      x-api-key: !secret flow_power_api_key
+      Content-Type: application/json
+    payload: '{"regName":"nsw","period":1}'
+    scan_interval: 600
+    sensor:
+      - name: Flow price forecast max 24h
+        unique_id: flow_price_forecast_max_24h
+        unit_of_measurement: "$/kWh"
+        value_template: >
+          {% set d = value_json | from_json %}
+          {{ ((d | map(attribute='Value') | max) / 1000) | round(2) if d else none }}
+      # "start/end" of the first..last interval at or above the threshold, or "none"
+      - name: Flow price spike window
+        unique_id: flow_price_spike_window
+        value_template: >
+          {% set thr = states('input_number.flow_spike_threshold') | float(1) * 1000 %}
+          {% set hits = (value_json | from_json) | selectattr('Value', '>=', thr) | list %}
+          {% if hits %}{{ (as_datetime(hits[0].Key) - timedelta(minutes=30)).isoformat() }}/{{ as_datetime(hits[-1].Key).isoformat() }}{% else %}none{% endif %}
+
+  # 30-day PEA / price summary for this NMI
+  - resource: https://api.kwatch.com.au/api/v1/GetResidentialSiteSummary
+    method: POST
+    headers:
+      x-api-key: !secret flow_power_api_key
+      Content-Type: application/json
+    payload: !secret flow_power_summary_payload
+    scan_interval: 3600
+    sensor:
+      - name: Flow PEA 30 days
+        unique_id: flow_pea_30d
+        unit_of_measurement: "c/kWh"
+        value_template: "{{ ((value_json | from_json).PEA30Days) | round(2) }}"
+      - name: Flow PEA 30 days imports
+        unique_id: flow_pea_30d_import
+        unit_of_measurement: "c/kWh"
+        value_template: "{{ ((value_json | from_json).PEA30ImportDays) | round(2) }}"
+      - name: Flow load weighted price 30 days
+        unique_id: flow_lwap_30d
+        unit_of_measurement: "c/kWh"
+        value_template: "{{ ((value_json | from_json).LWAPImp) | round(2) }}"
+
+template:
+  - sensor:
+      - name: Flow price spike start
+        unique_id: flow_price_spike_start
+        device_class: timestamp
+        state: >
+          {% set w = states('sensor.flow_price_spike_window') %}
+          {{ (w.split('/')[0] | as_datetime) if '/' in w else none }}
+      - name: Flow price spike end
+        unique_id: flow_price_spike_end
+        device_class: timestamp
+        state: >
+          {% set w = states('sensor.flow_price_spike_window') %}
+          {{ (w.split('/')[1] | as_datetime) if '/' in w else none }}
+
+  - binary_sensor:
+      # On while the current price, or a forecast spike, is at/above the threshold.
+      # Use it as a condition in flexible-load automations (pool pump, EV, dishwasher).
+      - name: Flow price spike active
+        unique_id: flow_price_spike_active
+        device_class: problem
+        state: >
+          {% set thr = states('input_number.flow_spike_threshold') | float(1) %}
+          {% set s = states('sensor.flow_price_spike_start') | as_datetime(none) %}
+          {% set e = states('sensor.flow_price_spike_end') | as_datetime(none) %}
+          {{ states('sensor.flow_price_now') | float(0) >= thr
+             or (s is not none and e is not none and s <= now() < e) }}
+
+automation:
+  - id: flow_spike_forecast_notify
+    alias: Flow - price spike forecast
+    triggers:
+      - trigger: state
+        entity_id: sensor.flow_price_spike_start
+    conditions:
+      - condition: template
+        value_template: >
+          {{ has_value('sensor.flow_price_spike_start')
+             and (trigger.from_state is none
+                  or trigger.from_state.state in ['unknown', 'unavailable']) }}
+    actions:
+      - action: notify.notify
+        data:
+          title: Price spike forecast
+          message: >
+            {{ (states('sensor.flow_price_spike_start') | as_datetime | as_local).strftime('%H:%M') }}-{{ (states('sensor.flow_price_spike_end') | as_datetime | as_local).strftime('%H:%M') }},
+            up to ${{ states('sensor.flow_price_forecast_max_24h') }}/kWh. Avoid heavy loads; Happy Hour will block grid import while discharging.
