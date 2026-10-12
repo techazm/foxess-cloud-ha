@@ -104,7 +104,14 @@ Around April, switch back to a plan with a free midday window and turn off `hh_e
 ## Not yet included
 - Reconciling actual Happy Hour kWh from the Flow Power API against the local counter.
 
+## Troubleshooting
+| Symptom | Cause / fix |
+|---|---|
+| Flow sensors `unknown`, log shows *"do not have permission to perform this action"* | API key rejected. Check Web Data Access is on in the Flow app, copy the current key into `secrets.yaml`, then reload *REST entities* (Developer Tools -> YAML) or restart |
+| `Solar tomorrow` far below what you produce | Forecast.Solar location (lat/long, from HA's home location), modules power (W), inverter size or damping. Set `hh_poor_solar_kwh` to 0 until fixed |
+
 ## Changelog
+- 2026-10-12 - v1.6.1: Flow Power sensors go `unknown` on API errors (e.g. rejected key) instead of failing to load with a template error; troubleshooting section.
 - 2026-10-12 - v1.6: optional `dashboard.yaml` (status, gauges, history/statistics graphs, controls, logbook) using built-in cards.
 - 2026-10-12 - v1.5: plan for 40% SoC at 08:00 (`hh_morning_target_soc`) on top of a lower hard floor; replaces `hh_morning_buffer_kwh`. Overnight learning runs to 08:00 and adds a learned extra margin when the target is missed. Learned helpers no longer have `initial`, so they survive HA restarts (the overnight average used to reset to 6 kWh). Force discharge power defaults to 10 kW. Configurable import alert.
 - 2026-10-12 - v1.4: optional Flow Power price-spike package (current/forecast prices, PEA); spike-aware reserve and `import_limit: 0` during evening spikes; placeholder entity slug instead of a real inverter serial.
