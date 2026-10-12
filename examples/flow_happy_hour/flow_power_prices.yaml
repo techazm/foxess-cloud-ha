@@ -10,6 +10,8 @@
 #
 # API notes (https://api.kwatch.com.au/api/v1/<method>, POST, header x-api-key):
 #   - responses are a JSON *string* containing JSON, hence `value_json | from_json`
+#   - errors (e.g. a bad key) come back as a plain message, not JSON; the
+#     from_json defaults turn those into "unknown" instead of a template error
 #   - prices are $/MWh (divide by 1000 for $/kWh)
 #   - timestamps are NEM time (+10:00) and mark the END of each interval
 #   - PEA figures are c/kWh; negative = cheaper than average (good)
@@ -38,7 +40,7 @@ rest:
         unit_of_measurement: "$/kWh"
         state_class: measurement
         value_template: >
-          {% set d = value_json | from_json %}
+          {% set d = value_json | from_json([]) %}
           {{ (d[-1].Value / 1000) | round(3) if d else none }}
 
   # 30-min pre-dispatch forecast, next 24 h
@@ -54,14 +56,14 @@ rest:
         unique_id: flow_price_forecast_max_24h
         unit_of_measurement: "$/kWh"
         value_template: >
-          {% set d = value_json | from_json %}
+          {% set d = value_json | from_json([]) %}
           {{ ((d | map(attribute='Value') | max) / 1000) | round(2) if d else none }}
       # "start/end" of the first..last interval at or above the threshold, or "none"
       - name: Flow price spike window
         unique_id: flow_price_spike_window
         value_template: >
           {% set thr = states('input_number.flow_spike_threshold') | float(1) * 1000 %}
-          {% set hits = (value_json | from_json) | selectattr('Value', '>=', thr) | list %}
+          {% set hits = (value_json | from_json([])) | selectattr('Value', '>=', thr) | list %}
           {% if hits %}{{ (as_datetime(hits[0].Key) - timedelta(minutes=30)).isoformat() }}/{{ as_datetime(hits[-1].Key).isoformat() }}{% else %}none{% endif %}
 
   # 30-day PEA / price summary for this NMI
@@ -76,15 +78,15 @@ rest:
       - name: Flow PEA 30 days
         unique_id: flow_pea_30d
         unit_of_measurement: "c/kWh"
-        value_template: "{{ ((value_json | from_json).PEA30Days) | round(2) }}"
+        value_template: "{% set d = value_json | from_json({}) %}{{ d.PEA30Days | round(2) if d.PEA30Days is number else none }}"
       - name: Flow PEA 30 days imports
         unique_id: flow_pea_30d_import
         unit_of_measurement: "c/kWh"
-        value_template: "{{ ((value_json | from_json).PEA30ImportDays) | round(2) }}"
+        value_template: "{% set d = value_json | from_json({}) %}{{ d.PEA30ImportDays | round(2) if d.PEA30ImportDays is number else none }}"
       - name: Flow load weighted price 30 days
         unique_id: flow_lwap_30d
         unit_of_measurement: "c/kWh"
-        value_template: "{{ ((value_json | from_json).LWAPImp) | round(2) }}"
+        value_template: "{% set d = value_json | from_json({}) %}{{ d.LWAPImp | round(2) if d.LWAPImp is number else none }}"
 
 template:
   - sensor:
