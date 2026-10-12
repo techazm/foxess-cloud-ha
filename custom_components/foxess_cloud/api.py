@@ -71,7 +71,7 @@ class FoxESSCloudApi:
         signature = self._md5(signature_text)
         return {
             "Content-Type": "application/json",
-            "User-Agent": "FoxESSCloud-HA/1.1.1",
+            "User-Agent": "FoxESSCloud-HA/1.2.0",
             "token": self._api_key,
             "timestamp": timestamp,
             "signature": signature,

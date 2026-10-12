@@ -193,7 +193,8 @@ These update every 3rd polling cycle (~15 minutes):
 
 | Entity | Unit | Description |
 |--------|------|-------------|
-| Daily Generation | kWh | Total solar generation today |
+| Daily PV Production | kWh | Solar panel output today: feed-in + load + battery charge − battery discharge − grid import. Use this for the Energy dashboard. Excludes inverter losses, so it reads a few % below the FoxESS app's solar figure |
+| Daily Generation | kWh | Inverter AC output today (FoxESS `generation`). On a hybrid this excludes PV that charged the battery directly, so it is **not** total solar production |
 | Daily Feed-in | kWh | Total exported to grid today |
 | Daily Grid Consumption | kWh | Total imported from grid today |
 | Daily Load | kWh | Total home consumption today |
@@ -217,7 +218,7 @@ These update every 12th polling cycle (~60 minutes):
 Go to **Settings → Dashboards → Energy** and configure:
 
 ### Solar Panels
-- **Solar production:** select your `Daily Generation` sensor
+- **Solar production:** select your `Daily PV Production` sensor (not `Daily Generation`, which misses PV that went straight into the battery)
 
 ### Grid
 - **Grid consumption** (energy FROM grid): select your `Daily Grid Consumption` sensor
@@ -323,6 +324,10 @@ Go to **Settings → Devices & Services → Fox ESS Cloud → ⋮ → Download d
 ---
 
 ## Changelog
+
+### 1.2.0 (2026-10-12)
+- **New:** *Daily PV Production* sensor - panel output calculated from the daily report (feed-in + load + battery charge − battery discharge − grid import). *Daily Generation* is the inverter's AC output and undercounts solar on hybrids (e.g. 25 kWh vs ~56 kWh on a day that charged the battery 28 kWh). Switch the Energy dashboard's solar source to the new sensor.
+- README: clarified what *Daily Generation* measures.
 
 ### 1.1.1 (2026-10-11)
 - **Fix:** Force Discharge groups now send `secondWorkMode` (default `SelfUse`). Without it the after-cut-off behaviour was left to the inverter's default.

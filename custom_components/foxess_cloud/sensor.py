@@ -61,6 +61,21 @@ def _rpt(variable: str) -> Callable[[dict[str, Any]], StateType]:
     return _get
 
 
+def _daily_pv(data: dict[str, Any]) -> StateType:
+    """Panel (DC) energy today, from the energy balance of the daily report.
+
+    FoxESS "generation" is the inverter's AC output, so on a hybrid it misses
+    PV that charged the battery directly. Inverter losses are not included,
+    so this reads a few % below the panels' true output.
+    """
+    rpt = data.get("report", {})
+    keys = ("feedin", "loads", "chargeEnergyToTal", "dischargeEnergyToTal", "gridConsumption")
+    if any(rpt.get(k) is None for k in keys):
+        return None
+    feedin, loads, charge, discharge, grid = (float(rpt[k]) for k in keys)
+    return round(max(feedin + loads + charge - discharge - grid, 0.0), 2)
+
+
 def _gen(key: str) -> Callable[[dict[str, Any]], StateType]:
     """Helper: get a generation variable."""
     def _get(data: dict[str, Any]) -> StateType:
@@ -320,6 +335,16 @@ REALTIME_SENSORS: tuple[FoxESSSensorDescription, ...] = (
 )
 
 REPORT_SENSORS: tuple[FoxESSSensorDescription, ...] = (
+    FoxESSSensorDescription(
+        key="daily_pv_production",
+        name="Daily PV Production",
+        icon="mdi:solar-panel-large",
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        value_fn=_daily_pv,
+        is_daily_reset=True,
+    ),
     FoxESSSensorDescription(
         key="daily_generation",
         name="Daily Generation",
