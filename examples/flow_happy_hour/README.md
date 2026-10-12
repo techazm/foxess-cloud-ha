@@ -38,7 +38,19 @@ Cloud API budget: 2 schedule writes/day (4 calls each) + 1 forced refresh. Well 
 4. Optional: add a PV forecast. The YAML uses the built-in **Forecast.Solar** sensor `sensor.energy_production_tomorrow` (Settings -> Devices & services -> Add -> Forecast.Solar). For Solcast (HACS, more accurate), replace it with `sensor.solcast_pv_forecast_forecast_tomorrow`. Without a forecast the package still works; it just can't hold extra back before cloudy days.
 5. In **Developer Tools -> Actions**, run `foxess_cloud.get_schedule` (Return response) and confirm `properties` lists `fdsoc`/`fdpwr`/`secondworkmode`. On a KH10, `fd_pwr` max is 10500 W and SoC fields can't go below 10%.
 6. Optional: add `flow_power_prices.yaml` for price-spike handling (see below).
-7. Turn on `input_boolean.hh_dry_run` and `input_boolean.hh_enabled`, watch the notifications for 2-3 days, then turn dry run off.
+7. Optional: add the dashboard (see below).
+8. Turn on `input_boolean.hh_dry_run` and `input_boolean.hh_enabled`, watch the notifications for 2-3 days, then turn dry run off.
+
+## Dashboard (`dashboard.yaml`, optional)
+Built-in cards only (no HACS). Settings -> Dashboards -> Add dashboard -> open it -> Edit -> Raw configuration editor, paste the file, then replace `fox_ess_inverter` with your slug.
+
+| Section | Shows |
+|---|---|
+| Tonight | Live status line (what the optimiser does next), key numbers, battery and export gauges |
+| Graphs | Battery vs reserve / armed cut-off / 08:00 target (24 h), export vs 35c cap (24 h), wholesale price + spikes (48 h), daily export/import/load bars (14 days) |
+| Controls | On/off, dry run and every tuning helper; Flow Power prices and PEA; logbook of automation runs and margin changes |
+
+The logbook uses automation entity IDs derived from the aliases (e.g. `automation.happy_hour_arm_tonight`). If you renamed them, update the list.
 
 ## Tuning
 | Setting | Default | When to change |
@@ -93,6 +105,7 @@ Around April, switch back to a plan with a free midday window and turn off `hh_e
 - Reconciling actual Happy Hour kWh from the Flow Power API against the local counter.
 
 ## Changelog
+- 2026-10-12 - v1.6: optional `dashboard.yaml` (status, gauges, history/statistics graphs, controls, logbook) using built-in cards.
 - 2026-10-12 - v1.5: plan for 40% SoC at 08:00 (`hh_morning_target_soc`) on top of a lower hard floor; replaces `hh_morning_buffer_kwh`. Overnight learning runs to 08:00 and adds a learned extra margin when the target is missed. Learned helpers no longer have `initial`, so they survive HA restarts (the overnight average used to reset to 6 kWh). Force discharge power defaults to 10 kW. Configurable import alert.
 - 2026-10-12 - v1.4: optional Flow Power price-spike package (current/forecast prices, PEA); spike-aware reserve and `import_limit: 0` during evening spikes; placeholder entity slug instead of a real inverter serial.
 - 2026-10-11 - v1.3: PV forecast is optional; a missing/unavailable forecast no longer counts as a poor solar day (it was adding ~13% to the reserve).
