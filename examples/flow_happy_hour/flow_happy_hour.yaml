@@ -5,18 +5,25 @@
 #     packages: !include_dir_named packages
 # See README.md for tuning and testing.
 #
-# Entity IDs assume the default device name "Fox ESS 60KB103062CB096".
-# If yours differ, search/replace "fox_ess_60kb103062cb096".
-#   sensor.fox_ess_60kb103062cb096_battery_soc             battery SoC (%)
-#   sensor.fox_ess_60kb103062cb096_daily_feed_in           export today (kWh, ~15 min updates)
-#   sensor.fox_ess_60kb103062cb096_daily_grid_consumption  import today (kWh)
-#   sensor.fox_ess_60kb103062cb096_daily_load              house load today (kWh)
-#   button.fox_ess_60kb103062cb096_refresh_all_data
+# Goal: export as much as possible 17:30-21:30 while planning to still have
+# hh_morning_target_soc (default 40%) at 08:00. The inverter's hard floor
+# (hh_floor_soc) stays lower, so a heavier night uses battery instead of grid.
+#
+# Entity IDs use the placeholder "fox_ess_inverter". Search/replace it with your
+# device's slug, e.g. "fox_ess_<serial in lower case>" for the default name.
+#   sensor.fox_ess_inverter_battery_soc             battery SoC (%)
+#   sensor.fox_ess_inverter_daily_feed_in           export today (kWh, ~15 min updates)
+#   sensor.fox_ess_inverter_daily_grid_consumption  import today (kWh)
+#   sensor.fox_ess_inverter_daily_load              house load today (kWh)
+#   button.fox_ess_inverter_refresh_all_data
 #   sensor.energy_production_tomorrow           tomorrow's PV forecast (kWh), optional.
 #     Solcast (HACS) or Forecast.Solar (built-in: sensor.energy_production_tomorrow).
 #     If the sensor is missing or unavailable, no poor-solar extra is added and
 #     the 10c top-up isn't blocked by the forecast.
 #   notify.notify                                          your notifier
+# Optional: flow_power_prices.yaml (Flow Power API). When present, the reserve
+# grows before overnight price spikes and grid import is blocked while force
+# discharging through a spike.
 
 input_boolean:
   hh_enabled:
@@ -29,29 +36,34 @@ input_boolean:
 input_number:
   hh_battery_usable_kwh:   { name: Battery usable kWh,          min: 10, max: 60,  step: 0.5, initial: 38,   unit_of_measurement: kWh }
   hh_cap_kwh:              { name: Happy Hour 35c cap,          min: 0,  max: 30,  step: 0.5, initial: 15,   unit_of_measurement: kWh }
-  hh_fd_power_w:           { name: Force discharge power,       min: 1000, max: 10000, step: 100, initial: 5500, unit_of_measurement: W }
-  hh_floor_soc:            { name: Floor SoC,                   min: 10, max: 50,  step: 1,   initial: 10,   unit_of_measurement: "%" }
+  hh_fd_power_w:           { name: Force discharge power,       min: 1000, max: 10500, step: 100, initial: 10000, unit_of_measurement: W }
+  hh_floor_soc:            { name: Hard floor SoC (inverter),   min: 10, max: 50,  step: 1,   initial: 10,   unit_of_measurement: "%" }
+  hh_morning_target_soc:   { name: Planned minimum SoC at 08:00, min: 10, max: 80, step: 1,   initial: 40,   unit_of_measurement: "%" }
   hh_reserve_margin_pct:   { name: Reserve margin,              min: 0,  max: 50,  step: 1,   initial: 15,   unit_of_measurement: "%" }
-  hh_morning_buffer_kwh:   { name: Morning buffer (07:00 until PV covers load), min: 0, max: 10, step: 0.5, initial: 2, unit_of_measurement: kWh }
+  hh_import_alert_kwh:     { name: Overnight import alert,      min: 0,  max: 5,   step: 0.01, initial: 0.5, unit_of_measurement: kWh }
   hh_poor_solar_kwh:       { name: Poor solar day threshold,    min: 0,  max: 100, step: 1,   initial: 30,   unit_of_measurement: kWh }
   hh_poor_solar_extra_kwh: { name: Extra reserve on poor solar, min: 0,  max: 20,  step: 0.5, initial: 5,    unit_of_measurement: kWh }
   hh_surplus_min_kwh:      { name: Min surplus to sell at 10c,  min: 0,  max: 20,  step: 0.5, initial: 3,    unit_of_measurement: kWh }
-  # Learned / state values (written by automations)
-  hh_overnight_load_avg_kwh: { name: Overnight load avg (21:30-07:00), min: 0, max: 60, step: 0.01, initial: 6, unit_of_measurement: kWh, mode: box }
+  hh_spike_extra_kwh:      { name: Extra reserve before overnight price spike, min: 0, max: 20, step: 0.5, initial: 3, unit_of_measurement: kWh }
+  # Learned / state values (written by automations). No `initial`, so they survive restarts.
+  hh_overnight_load_avg_kwh: { name: Overnight load avg (21:30-08:00), min: 0, max: 60, step: 0.01, unit_of_measurement: kWh, mode: box }
+  hh_margin_bump_pct:      { name: Learned extra margin,  min: 0, max: 50, step: 1, mode: box, unit_of_measurement: "%" }
   hh_load_at_2130:         { name: Load meter at 21:30,   min: 0, max: 10000000, step: 0.01, mode: box }
   hh_import_at_2130:       { name: Import meter at 21:30, min: 0, max: 10000000, step: 0.01, mode: box }
+  hh_cutoff_soc:           { name: Tonight's planned cut-off, min: 0, max: 100, step: 1, mode: box, unit_of_measurement: "%" }
+  hh_soc_at_2130:          { name: SoC at 21:30,          min: 0, max: 100, step: 1, mode: box, unit_of_measurement: "%" }
 
 utility_meter:
   # Happy Hour export counter, reset at 17:30 every day
   hh_export_window:
-    source: sensor.fox_ess_60kb103062cb096_daily_feed_in
+    source: sensor.fox_ess_inverter_daily_feed_in
     cron: "30 17 * * *"
-  # Never-resetting totals built from the daily sensors, so 21:30 -> 07:00
+  # Never-resetting totals built from the daily sensors, so 21:30 -> 08:00
   # differences survive the midnight reset
   hh_load_total:
-    source: sensor.fox_ess_60kb103062cb096_daily_load
+    source: sensor.fox_ess_inverter_daily_load
   hh_import_total:
-    source: sensor.fox_ess_60kb103062cb096_daily_grid_consumption
+    source: sensor.fox_ess_inverter_daily_grid_consumption
 
 template:
   - sensor:
@@ -60,21 +72,28 @@ template:
         unit_of_measurement: "%"
         state: >
           {% set usable = states('input_number.hh_battery_usable_kwh') | float(38) %}
-          {% set night  = states('input_number.hh_overnight_load_avg_kwh') | float(6) %}
-          {% set morn   = states('input_number.hh_morning_buffer_kwh') | float(2) %}
-          {% set margin = states('input_number.hh_reserve_margin_pct') | float(15) / 100 %}
+          {# 0 = nothing learned yet: assume 7 kWh #}
+          {% set night  = states('input_number.hh_overnight_load_avg_kwh') | float(0) or 7 %}
+          {% set margin = (states('input_number.hh_reserve_margin_pct') | float(15)
+                           + states('input_number.hh_margin_bump_pct') | float(0)) / 100 %}
           {% set floor  = states('input_number.hh_floor_soc') | float(10) %}
+          {% set target = states('input_number.hh_morning_target_soc') | float(40) %}
           {% set fc     = 'sensor.energy_production_tomorrow' %}
           {% set poor   = has_value(fc) and states(fc) | float(0) < states('input_number.hh_poor_solar_kwh') | float(30) %}
           {% set extra  = states('input_number.hh_poor_solar_extra_kwh') | float(5) if poor else 0 %}
-          {% set kwh = (night + morn) * (1 + margin) + extra %}
-          {{ [[floor + kwh / usable * 100, floor] | max, 95] | min | round(0) }}
+          {% set s = states('sensor.flow_price_spike_start') | as_datetime(none) %}
+          {% set e = states('sensor.flow_price_spike_end') | as_datetime(none) %}
+          {% set overnight = s is not none and e is not none
+                             and e > today_at('21:30') and s < today_at('08:00') + timedelta(days=1) %}
+          {% set spike = states('input_number.hh_spike_extra_kwh') | float(3) if overnight else 0 %}
+          {% set kwh = night * (1 + margin) + extra + spike %}
+          {{ [[target, floor] | max + kwh / usable * 100, 95] | min | round(0) }}
 
       - name: HH surplus kWh
         unique_id: hh_surplus_kwh
         unit_of_measurement: kWh
         state: >
-          {% set soc = states('sensor.fox_ess_60kb103062cb096_battery_soc') | float(0) %}
+          {% set soc = states('sensor.fox_ess_inverter_battery_soc') | float(0) %}
           {% set res = states('sensor.hh_reserve_soc') | float(100) %}
           {{ ((soc - res) / 100 * states('input_number.hh_battery_usable_kwh') | float(38)) | round(2) }}
 
@@ -87,13 +106,15 @@ script:
       fd_enabled: { description: Force discharge 17:30-21:29 on/off }
       fd_soc:     { description: Discharge cut-off SoC (%) }
       fd_power:   { description: Discharge power to grid (W) }
+      block_import: { description: Set import limit 0 W in the evening block (price spike) }
     variables:
       floor: "{{ states('input_number.hh_floor_soc') | int(10) }}"
       evening: >
         {% if fd_enabled %}
-          {{ {"start": "17:30", "end": "21:29", "work_mode": "ForceDischarge",
-              "min_soc_on_grid": floor, "fd_soc": fd_soc | int, "fd_pwr": fd_power | int,
-              "second_work_mode": "SelfUse"} }}
+          {% set g = {"start": "17:30", "end": "21:29", "work_mode": "ForceDischarge",
+                      "min_soc_on_grid": floor, "fd_soc": fd_soc | int, "fd_pwr": fd_power | int,
+                      "second_work_mode": "SelfUse"} %}
+          {{ dict(g, import_limit=0) if block_import | default(false) else g }}
         {% else %}
           {{ {"start": "17:30", "end": "21:29", "work_mode": "SelfUse", "min_soc_on_grid": floor} }}
         {% endif %}
@@ -119,16 +140,24 @@ automation:
     triggers: [{ trigger: time, at: "17:20:00" }]
     conditions: [{ condition: state, entity_id: input_boolean.hh_enabled, state: "on" }]
     actions:
+      - action: input_number.set_value
+        target: { entity_id: input_number.hh_cutoff_soc }
+        data: { value: "{{ states('sensor.hh_reserve_soc') | int }}" }
       - action: script.foxess_apply_schedule
         data:
           fd_enabled: true
           fd_soc: "{{ states('sensor.hh_reserve_soc') | int }}"
           fd_power: "{{ states('input_number.hh_fd_power_w') | int }}"
+          # Price spike overlapping 17:30-21:30: never import while discharging
+          block_import: >
+            {% set s = states('sensor.flow_price_spike_start') | as_datetime(none) %}
+            {% set e = states('sensor.flow_price_spike_end') | as_datetime(none) %}
+            {{ s is not none and e is not none and s < today_at('21:30') and e > today_at('17:30') }}
       - action: notify.notify
         data:
           title: Happy Hour armed
           message: >
-            Cut-off {{ states('sensor.hh_reserve_soc') }}%, SoC now {{ states('sensor.fox_ess_60kb103062cb096_battery_soc') }}%,
+            Cut-off {{ states('sensor.hh_reserve_soc') }}%, SoC now {{ states('sensor.fox_ess_inverter_battery_soc') }}%,
             solar tomorrow {{ states('sensor.energy_production_tomorrow') if has_value('sensor.energy_production_tomorrow') else 'no forecast' }} kWh.
 
   # 17:29 - pull fresh daily totals so pre-17:30 solar export isn't counted in the window
@@ -138,7 +167,7 @@ automation:
     conditions: [{ condition: state, entity_id: input_boolean.hh_enabled, state: "on" }]
     actions:
       - action: button.press
-        target: { entity_id: button.fox_ess_60kb103062cb096_refresh_all_data }
+        target: { entity_id: button.fox_ess_inverter_refresh_all_data }
 
   # 35c cap reached - keep selling at 10c only with real surplus (write 2)
   # Daily feed-in updates every ~15 min, so this can overshoot the cap by ~1 kWh (sold at 10c).
@@ -163,7 +192,7 @@ automation:
             data: { fd_enabled: false, fd_soc: 100, fd_power: 0 }
           - action: notify.notify
             data:
-              message: "35c cap hit ({{ states('sensor.hh_export_window') }} kWh). Stopped export, holding {{ states('sensor.fox_ess_60kb103062cb096_battery_soc') }}%."
+              message: "35c cap hit ({{ states('sensor.hh_export_window') }} kWh). Stopped export, holding {{ states('sensor.fox_ess_inverter_battery_soc') }}%."
         else:
           - action: notify.notify
             data:
@@ -180,24 +209,45 @@ automation:
       - action: input_number.set_value
         target: { entity_id: input_number.hh_import_at_2130 }
         data: { value: "{{ states('sensor.hh_import_total') | float(0) }}" }
+      - action: input_number.set_value
+        target: { entity_id: input_number.hh_soc_at_2130 }
+        data: { value: "{{ states('sensor.fox_ess_inverter_battery_soc') | float(0) }}" }
 
-  # 07:00 - learn overnight load (EMA, alpha 0.25) and flag any overnight import
+  # 08:00 - learn overnight load (EMA, alpha 0.25), check the 08:00 target, flag imports
   - id: hh_learn_morning
     alias: Happy Hour - learn overnight load
-    triggers: [{ trigger: time, at: "07:00:00" }]
+    triggers: [{ trigger: time, at: "08:00:00" }]
     variables:
       load_kwh: "{{ (states('sensor.hh_load_total') | float(0) - states('input_number.hh_load_at_2130') | float(0)) | round(2) }}"
       import_kwh: "{{ (states('sensor.hh_import_total') | float(0) - states('input_number.hh_import_at_2130') | float(0)) | round(2) }}"
+      soc: "{{ states('sensor.fox_ess_inverter_battery_soc') | float(0) }}"
+      target: "{{ states('input_number.hh_morning_target_soc') | float(40) }}"
+      # Only blame the reserve if the night actually started at (or above) the planned cut-off
+      started_ok: >
+        {{ states('input_number.hh_cutoff_soc') | float(0) > 0
+           and states('input_number.hh_soc_at_2130') | float(0) >= states('input_number.hh_cutoff_soc') | float(0) - 2 }}
     actions:
       - if: "{{ 0 < load_kwh < 40 }}"
         then:
           - action: input_number.set_value
             target: { entity_id: input_number.hh_overnight_load_avg_kwh }
             data:
-              value: "{{ (0.75 * states('input_number.hh_overnight_load_avg_kwh') | float(6) + 0.25 * load_kwh) | round(2) }}"
-      - if: "{{ import_kwh > 0.5 }}"
+              value: >
+                {% set avg = states('input_number.hh_overnight_load_avg_kwh') | float(0) %}
+                {{ (0.75 * avg + 0.25 * load_kwh) | round(2) if avg > 0 else load_kwh }}
+      - if: "{{ has_value('sensor.fox_ess_inverter_battery_soc') and soc < target and started_ok and is_state('input_boolean.hh_enabled', 'on') }}"
+        then:
+          - action: input_number.set_value
+            target: { entity_id: input_number.hh_margin_bump_pct }
+            data:
+              value: "{{ [states('input_number.hh_margin_bump_pct') | float(0) + 5, 50] | min }}"
+          - action: notify.notify
+            data:
+              title: Below 08:00 target
+              message: "SoC {{ soc | int }}% at 08:00 (target {{ target | int }}%). Learned extra margin now {{ states('input_number.hh_margin_bump_pct') | int }}%."
+      - if: "{{ import_kwh > states('input_number.hh_import_alert_kwh') | float(0.5) }}"
         then:
           - action: notify.notify
             data:
               title: Overnight grid import
-              message: "Imported {{ import_kwh }} kWh at ~42c overnight. Raise reserve margin or morning buffer."
+              message: "Imported {{ import_kwh }} kWh at ~42c overnight. Check for loads above inverter output, or raise the reserve margin."

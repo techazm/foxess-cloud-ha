@@ -1,0 +1,167 @@
+# Flow Power Happy Hour dashboard (built-in cards only, no HACS).
+# Settings -> Dashboards -> Add dashboard -> open it -> ⋮ -> Edit -> ⋮ -> Raw configuration editor,
+# then paste this file. Replace "fox_ess_inverter" with your device slug.
+# Logbook card: automation entity IDs come from the aliases; check them under
+# Settings -> Automations if a row shows as unknown.
+title: Happy Hour
+views:
+  - title: Happy Hour
+    path: happy-hour
+    type: sections
+    max_columns: 3
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Tonight
+          - type: markdown
+            content: |
+              {% set soc = states('sensor.fox_ess_inverter_battery_soc') | float(0) %}
+              {% set res = states('sensor.hh_reserve_soc') | float(0) %}
+              {% set cut = states('input_number.hh_cutoff_soc') | float(0) %}
+              {% set cap = states('input_number.hh_cap_kwh') | float(15) %}
+              {% set exp = states('sensor.hh_export_window') | float(0) %}
+              {% set fc = 'sensor.energy_production_tomorrow' %}
+              {% set t = now().strftime('%H:%M') %}
+              {% if is_state('input_boolean.hh_enabled', 'off') %}**Optimiser off** - the inverter runs whatever schedule is set.
+              {% elif t < '17:20' %}Arms at **17:20** with cut-off **{{ res | int }}%**.
+              {% elif t < '17:30' %}Armed: force discharge from 17:30 down to **{{ cut | int }}%**.
+              {% elif t < '21:30' %}{% if exp < cap %}Discharging to **{{ cut | int }}%**, {{ (cap - exp) | round(1) }} kWh left at 35c.{% else %}35c cap reached ({{ exp | round(1) }} kWh).{% endif %}
+              {% else %}Self-use overnight. 08:00 target **{{ states('input_number.hh_morning_target_soc') | int }}%**.{% endif %}
+              {% if is_state('input_boolean.hh_dry_run', 'on') %}_(dry run: no inverter writes)_{% endif %}
+
+              | | |
+              |---|---|
+              | Battery | {{ soc | int }}% |
+              | Reserve now / armed cut-off | {{ res | int }}% / {{ cut | int }}% |
+              | Surplus above reserve | {{ states('sensor.hh_surplus_kwh') }} kWh |
+              | Export since last 17:30 | {{ exp | round(2) }} / {{ cap }} kWh |
+              | Overnight load (learned) | {{ states('input_number.hh_overnight_load_avg_kwh') }} kWh |
+              | Margin (base + learned) | {{ states('input_number.hh_reserve_margin_pct') | int }}% + {{ states('input_number.hh_margin_bump_pct') | int }}% |
+              | Solar tomorrow | {% if has_value(fc) %}{{ states(fc) }} kWh{% if states(fc) | float(0) < states('input_number.hh_poor_solar_kwh') | float(30) %} (poor: +{{ states('input_number.hh_poor_solar_extra_kwh') }} kWh reserve){% endif %}{% else %}no forecast{% endif %} |
+              | Price now | ${{ states('sensor.flow_price_now') }}/kWh |
+              | Next spike | {% if has_value('sensor.flow_price_spike_start') %}{{ as_timestamp(states('sensor.flow_price_spike_start')) | timestamp_custom('%a %H:%M') }}-{{ as_timestamp(states('sensor.flow_price_spike_end')) | timestamp_custom('%H:%M') }}{% else %}none forecast{% endif %} |
+              | SoC at last 21:30 | {{ states('input_number.hh_soc_at_2130') | int }}% |
+          - type: gauge
+            entity: sensor.fox_ess_inverter_battery_soc
+            name: Battery
+            needle: true
+            min: 0
+            max: 100
+            segments:
+              - { from: 0, color: "#db4437" }
+              - { from: 40, color: "#ffa600" }
+              - { from: 60, color: "#43a047" }
+          - type: gauge
+            entity: sensor.hh_export_window
+            name: Export since 17:30
+            unit: kWh
+            needle: true
+            min: 0
+            max: 20
+            segments:
+              - { from: 0, color: "#43a047" }
+              - { from: 15, color: "#ffa600" }
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Graphs
+          - type: history-graph
+            title: Battery vs plan (24 h)
+            hours_to_show: 24
+            entities:
+              - entity: sensor.fox_ess_inverter_battery_soc
+                name: Battery
+              - entity: sensor.hh_reserve_soc
+                name: Reserve (live)
+              - entity: input_number.hh_cutoff_soc
+                name: Armed cut-off
+              - entity: input_number.hh_morning_target_soc
+                name: 08:00 target
+          - type: history-graph
+            title: Export window (24 h)
+            hours_to_show: 24
+            entities:
+              - entity: sensor.hh_export_window
+                name: Export since 17:30
+              - entity: input_number.hh_cap_kwh
+                name: 35c cap
+          - type: history-graph
+            title: Wholesale price (48 h)
+            hours_to_show: 48
+            entities:
+              - entity: sensor.flow_price_now
+                name: Now
+              - entity: sensor.flow_price_forecast_max_24h
+                name: Forecast max 24 h
+              - entity: input_number.flow_spike_threshold
+                name: Spike threshold
+              - entity: binary_sensor.flow_price_spike_active
+                name: Spike
+          - type: statistics-graph
+            title: Daily energy (14 days)
+            period: day
+            days_to_show: 14
+            chart_type: bar
+            stat_types: [change]
+            entities:
+              - entity: sensor.hh_export_window
+                name: Grid export
+              - entity: sensor.hh_import_total
+                name: Grid import
+              - entity: sensor.hh_load_total
+                name: House load
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Controls
+          - type: entities
+            entities:
+              - input_boolean.hh_enabled
+              - input_boolean.hh_dry_run
+              - type: section
+                label: Plan
+              - input_number.hh_morning_target_soc
+              - input_number.hh_floor_soc
+              - input_number.hh_reserve_margin_pct
+              - input_number.hh_margin_bump_pct
+              - input_number.hh_fd_power_w
+              - input_number.hh_cap_kwh
+              - input_number.hh_surplus_min_kwh
+              - type: section
+                label: Extras
+              - input_number.hh_poor_solar_kwh
+              - input_number.hh_poor_solar_extra_kwh
+              - input_number.hh_spike_extra_kwh
+              - input_number.flow_spike_threshold
+              - input_number.hh_import_alert_kwh
+          - type: heading
+            heading: Flow Power
+          - type: entities
+            entities:
+              - entity: sensor.flow_price_now
+                name: Price now
+              - entity: sensor.flow_price_forecast_max_24h
+                name: Forecast max 24 h
+              - entity: binary_sensor.flow_price_spike_active
+                name: Spike active
+              - entity: sensor.flow_pea_30_days
+                name: PEA 30 days
+              - entity: sensor.flow_pea_30_days_imports
+                name: PEA imports 30 days
+              - entity: sensor.flow_load_weighted_price_30_days
+                name: Import price 30 days
+          - type: logbook
+            title: What happened (48 h)
+            hours_to_show: 48
+            target:
+              entity_id:
+                - automation.happy_hour_arm_tonight
+                - automation.happy_hour_refresh_before_window
+                - automation.happy_hour_35c_cap_reached
+                - automation.happy_hour_snapshot_21_30
+                - automation.happy_hour_learn_overnight_load
+                - automation.flow_price_spike_forecast
+                - input_number.hh_margin_bump_pct
