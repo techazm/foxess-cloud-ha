@@ -115,7 +115,7 @@ If you have more than one inverter, simply add the integration again. Each inver
 
 ## Provided Entities
 
-All entities are grouped under a single device in the HA device registry (e.g., "Fox ESS 60KB103062CB096") with manufacturer, model, and firmware information.
+All entities are grouped under a single device in the HA device registry (e.g., "Fox ESS <serial>") with manufacturer, model, and firmware information.
 
 ### Controls
 

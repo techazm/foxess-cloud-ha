@@ -5,18 +5,21 @@
 #     packages: !include_dir_named packages
 # See README.md for tuning and testing.
 #
-# Entity IDs assume the default device name "Fox ESS 60KB103062CB096".
-# If yours differ, search/replace "fox_ess_60kb103062cb096".
-#   sensor.fox_ess_60kb103062cb096_battery_soc             battery SoC (%)
-#   sensor.fox_ess_60kb103062cb096_daily_feed_in           export today (kWh, ~15 min updates)
-#   sensor.fox_ess_60kb103062cb096_daily_grid_consumption  import today (kWh)
-#   sensor.fox_ess_60kb103062cb096_daily_load              house load today (kWh)
-#   button.fox_ess_60kb103062cb096_refresh_all_data
+# Entity IDs use the placeholder "fox_ess_inverter". Search/replace it with your
+# device's slug, e.g. "fox_ess_<serial in lower case>" for the default name.
+#   sensor.fox_ess_inverter_battery_soc             battery SoC (%)
+#   sensor.fox_ess_inverter_daily_feed_in           export today (kWh, ~15 min updates)
+#   sensor.fox_ess_inverter_daily_grid_consumption  import today (kWh)
+#   sensor.fox_ess_inverter_daily_load              house load today (kWh)
+#   button.fox_ess_inverter_refresh_all_data
 #   sensor.energy_production_tomorrow           tomorrow's PV forecast (kWh), optional.
 #     Solcast (HACS) or Forecast.Solar (built-in: sensor.energy_production_tomorrow).
 #     If the sensor is missing or unavailable, no poor-solar extra is added and
 #     the 10c top-up isn't blocked by the forecast.
 #   notify.notify                                          your notifier
+# Optional: flow_power_prices.yaml (Flow Power API). When present, the reserve
+# grows before overnight price spikes and grid import is blocked while force
+# discharging through a spike.
 
 input_boolean:
   hh_enabled:
@@ -36,6 +39,7 @@ input_number:
   hh_poor_solar_kwh:       { name: Poor solar day threshold,    min: 0,  max: 100, step: 1,   initial: 30,   unit_of_measurement: kWh }
   hh_poor_solar_extra_kwh: { name: Extra reserve on poor solar, min: 0,  max: 20,  step: 0.5, initial: 5,    unit_of_measurement: kWh }
   hh_surplus_min_kwh:      { name: Min surplus to sell at 10c,  min: 0,  max: 20,  step: 0.5, initial: 3,    unit_of_measurement: kWh }
+  hh_spike_extra_kwh:      { name: Extra reserve before overnight price spike, min: 0, max: 20, step: 0.5, initial: 3, unit_of_measurement: kWh }
   # Learned / state values (written by automations)
   hh_overnight_load_avg_kwh: { name: Overnight load avg (21:30-07:00), min: 0, max: 60, step: 0.01, initial: 6, unit_of_measurement: kWh, mode: box }
   hh_load_at_2130:         { name: Load meter at 21:30,   min: 0, max: 10000000, step: 0.01, mode: box }
@@ -44,14 +48,14 @@ input_number:
 utility_meter:
   # Happy Hour export counter, reset at 17:30 every day
   hh_export_window:
-    source: sensor.fox_ess_60kb103062cb096_daily_feed_in
+    source: sensor.fox_ess_inverter_daily_feed_in
     cron: "30 17 * * *"
   # Never-resetting totals built from the daily sensors, so 21:30 -> 07:00
   # differences survive the midnight reset
   hh_load_total:
-    source: sensor.fox_ess_60kb103062cb096_daily_load
+    source: sensor.fox_ess_inverter_daily_load
   hh_import_total:
-    source: sensor.fox_ess_60kb103062cb096_daily_grid_consumption
+    source: sensor.fox_ess_inverter_daily_grid_consumption
 
 template:
   - sensor:
@@ -67,14 +71,19 @@ template:
           {% set fc     = 'sensor.energy_production_tomorrow' %}
           {% set poor   = has_value(fc) and states(fc) | float(0) < states('input_number.hh_poor_solar_kwh') | float(30) %}
           {% set extra  = states('input_number.hh_poor_solar_extra_kwh') | float(5) if poor else 0 %}
-          {% set kwh = (night + morn) * (1 + margin) + extra %}
+          {% set s = states('sensor.flow_price_spike_start') | as_datetime(none) %}
+          {% set e = states('sensor.flow_price_spike_end') | as_datetime(none) %}
+          {% set overnight = s is not none and e is not none
+                             and e > today_at('21:30') and s < today_at('07:00') + timedelta(days=1) %}
+          {% set spike = states('input_number.hh_spike_extra_kwh') | float(3) if overnight else 0 %}
+          {% set kwh = (night + morn) * (1 + margin) + extra + spike %}
           {{ [[floor + kwh / usable * 100, floor] | max, 95] | min | round(0) }}
 
       - name: HH surplus kWh
         unique_id: hh_surplus_kwh
         unit_of_measurement: kWh
         state: >
-          {% set soc = states('sensor.fox_ess_60kb103062cb096_battery_soc') | float(0) %}
+          {% set soc = states('sensor.fox_ess_inverter_battery_soc') | float(0) %}
           {% set res = states('sensor.hh_reserve_soc') | float(100) %}
           {{ ((soc - res) / 100 * states('input_number.hh_battery_usable_kwh') | float(38)) | round(2) }}
 
@@ -87,13 +96,15 @@ script:
       fd_enabled: { description: Force discharge 17:30-21:29 on/off }
       fd_soc:     { description: Discharge cut-off SoC (%) }
       fd_power:   { description: Discharge power to grid (W) }
+      block_import: { description: Set import limit 0 W in the evening block (price spike) }
     variables:
       floor: "{{ states('input_number.hh_floor_soc') | int(10) }}"
       evening: >
         {% if fd_enabled %}
-          {{ {"start": "17:30", "end": "21:29", "work_mode": "ForceDischarge",
-              "min_soc_on_grid": floor, "fd_soc": fd_soc | int, "fd_pwr": fd_power | int,
-              "second_work_mode": "SelfUse"} }}
+          {% set g = {"start": "17:30", "end": "21:29", "work_mode": "ForceDischarge",
+                      "min_soc_on_grid": floor, "fd_soc": fd_soc | int, "fd_pwr": fd_power | int,
+                      "second_work_mode": "SelfUse"} %}
+          {{ dict(g, import_limit=0) if block_import | default(false) else g }}
         {% else %}
           {{ {"start": "17:30", "end": "21:29", "work_mode": "SelfUse", "min_soc_on_grid": floor} }}
         {% endif %}
@@ -124,11 +135,16 @@ automation:
           fd_enabled: true
           fd_soc: "{{ states('sensor.hh_reserve_soc') | int }}"
           fd_power: "{{ states('input_number.hh_fd_power_w') | int }}"
+          # Price spike overlapping 17:30-21:30: never import while discharging
+          block_import: >
+            {% set s = states('sensor.flow_price_spike_start') | as_datetime(none) %}
+            {% set e = states('sensor.flow_price_spike_end') | as_datetime(none) %}
+            {{ s is not none and e is not none and s < today_at('21:30') and e > today_at('17:30') }}
       - action: notify.notify
         data:
           title: Happy Hour armed
           message: >
-            Cut-off {{ states('sensor.hh_reserve_soc') }}%, SoC now {{ states('sensor.fox_ess_60kb103062cb096_battery_soc') }}%,
+            Cut-off {{ states('sensor.hh_reserve_soc') }}%, SoC now {{ states('sensor.fox_ess_inverter_battery_soc') }}%,
             solar tomorrow {{ states('sensor.energy_production_tomorrow') if has_value('sensor.energy_production_tomorrow') else 'no forecast' }} kWh.
 
   # 17:29 - pull fresh daily totals so pre-17:30 solar export isn't counted in the window
@@ -138,7 +154,7 @@ automation:
     conditions: [{ condition: state, entity_id: input_boolean.hh_enabled, state: "on" }]
     actions:
       - action: button.press
-        target: { entity_id: button.fox_ess_60kb103062cb096_refresh_all_data }
+        target: { entity_id: button.fox_ess_inverter_refresh_all_data }
 
   # 35c cap reached - keep selling at 10c only with real surplus (write 2)
   # Daily feed-in updates every ~15 min, so this can overshoot the cap by ~1 kWh (sold at 10c).
@@ -163,7 +179,7 @@ automation:
             data: { fd_enabled: false, fd_soc: 100, fd_power: 0 }
           - action: notify.notify
             data:
-              message: "35c cap hit ({{ states('sensor.hh_export_window') }} kWh). Stopped export, holding {{ states('sensor.fox_ess_60kb103062cb096_battery_soc') }}%."
+              message: "35c cap hit ({{ states('sensor.hh_export_window') }} kWh). Stopped export, holding {{ states('sensor.fox_ess_inverter_battery_soc') }}%."
         else:
           - action: notify.notify
             data:
