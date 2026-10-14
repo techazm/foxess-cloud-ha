@@ -1,7 +1,7 @@
-# Dependabot: at most one routine PR per day.
+# Dependabot: at most one routine PR twice a month (1st and 15th), to save Actions minutes.
 #
 # - Version updates (patch and minor) for every ecosystem and folder are bundled into a
-#   single daily PR by the `daily` multi-ecosystem group.
+#   single PR by the `daily` multi-ecosystem group (name kept so open PRs carry on).
 # - Security updates open as soon as an advisory lands, grouped to one PR per folder.
 #   They can need a major bump: check CI before merging.
 # - Majors never open PRs. .github/workflows/dependency-report.yml lists them in one
@@ -11,8 +11,9 @@ version: 2
 multi-ecosystem-groups:
   daily:
     schedule:
-      interval: daily
-      time: '07:00'
+      # Twice a month to save Actions minutes. Security updates still open straight away.
+      interval: cron
+      cronjob: "0 7 1,15 * *"
       timezone: Australia/Sydney
     labels: [dependencies]
     commit-message:
