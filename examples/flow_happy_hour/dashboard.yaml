@@ -68,7 +68,8 @@ views:
           - type: markdown
             content: >
               {% set v = state_attr('sensor.flow_day', 'v') %}
-              {% if v and v.partial %}**No full data for this day** (tracking from {{ v.from }}).{% endif %}
+              {% if v and v.from == 'none' %}**No snapshot yet** for this day: the first is taken at midnight, or run *Backfill from history* (Bill tab).
+              {% elif v and v.partial %}**No full data for this day** (tracking from {{ v.from }}; run *Backfill from history* on the Bill tab).{% endif %}
               _Today's Happy Hour is added at 21:30. PEA is Flow's provisional 30-day figure, not this day's;
               total adjustment = usage x PEA - export earnings (negative = credit)._
       - type: grid
@@ -83,7 +84,7 @@ views:
             stat_types: [change]
             entities:
               - { entity: sensor.flow_happy_hour_export_total, name: Exported 5:30-9:30pm }
-              - { entity: sensor.flow_export_total, name: Exported in total }
+              - { entity: sensor.fox_ess_inverter_daily_feed_in, name: Exported in total }
               - { entity: sensor.hh_import_total, name: Usage }
           - type: statistics-graph
             title: Export earnings
@@ -121,7 +122,8 @@ views:
           - type: markdown
             content: >
               {% set v = state_attr('sensor.flow_month', 'v') %}
-              {% if v and v.partial %}**Part month:** tracking from {{ v.from }}.{% endif %}
+              {% if v and v.from == 'none' %}**No snapshot yet** for this month.
+              {% elif v and v.partial %}**Part month:** tracking from {{ v.from }}.{% endif %}
               _PEA is Flow's provisional 30-day figure; the bill uses the PEA for its own period._
       - type: grid
         cards:
@@ -135,7 +137,7 @@ views:
             stat_types: [change]
             entities:
               - { entity: sensor.flow_happy_hour_export_total, name: Exported 5:30-9:30pm }
-              - { entity: sensor.flow_export_total, name: Exported in total }
+              - { entity: sensor.fox_ess_inverter_daily_feed_in, name: Exported in total }
               - { entity: sensor.hh_import_total, name: Usage }
           - type: statistics-graph
             title: Export earnings
@@ -172,9 +174,27 @@ views:
           - type: markdown
             content: >
               {% set v = state_attr('sensor.flow_bill', 'v') %}
-              {% if v and v.partial %}**Part period:** tracking from {{ v.from }}; fill the "Before tracking" helpers.{% endif %}
+              {% if v and v.from == 'none' %}**No snapshot yet:** run *Backfill from history* below.
+              {% elif v and v.partial %}**Part period:** tracking from {{ v.from }}; fill the "Before tracking" helpers for the days before.{% endif %}
               _Estimated bill = usage x {{ (states('input_number.flow_rate_import') | float(0) * 100) | round(2) }}c
               + supply + total adjustment. PEA is the 30-day figure ({{ states('sensor.flow_pea_30_days') }}c/kWh), not this bill's._
+          - type: heading
+            heading: Forecast for this bill
+          - { type: tile, entity: sensor.flow_bill_forecast_total, name: Forecast bill (negative = credit), icon: mdi:crystal-ball, color: indigo }
+          - { type: tile, entity: sensor.flow_bill_forecast_earnings, name: Export earnings, icon: mdi:cash-plus, color: blue, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_bill_forecast_peak_export, name: Exported 5:30-9:30pm, icon: mdi:transmission-tower-export, color: blue, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_bill_forecast_usage, name: Electricity usage, icon: mdi:transmission-tower-import, color: deep-orange, grid_options: { columns: 6 } }
+          - type: markdown
+            grid_options: { columns: 6 }
+            content: >
+              {% set f = state_attr('sensor.flow_bill_forecast', 'f') %}
+              {% if f %}Period ends **{{ as_timestamp(f.end ~ 'T12:00:00') | timestamp_custom('%a %-d %b') }}**, {{ f.days_left }} of {{ f.days_total }} days left.{% else %}Set the bill start.{% endif %}
+          - type: markdown
+            content: >
+              {% set f = state_attr('sensor.flow_bill_forecast', 'f') %}
+              {% if f %}_So far through yesterday + the daily average of the last {{ f.avg_days }} day(s) x days left (incl. today).
+              Supply ${{ f.supply }} for {{ f.days_total }} days, total adjustment ${{ f.adjustment }}.
+              Period end assumes a monthly bill{% if states('input_number.flow_bill_day') | int(0) == 0 %} a month after the bill start (bill day not known yet){% endif %}._{% endif %}
       - type: grid
         cards:
           - type: heading
@@ -182,6 +202,9 @@ views:
           - type: entities
             state_color: false
             entities:
+              - entity: script.flow_reports_backfill
+                name: Backfill from history (one-off, fills days before tracking)
+                icon: mdi:history
               - type: section
                 label: Rates
               - input_number.flow_rate_hh_high
