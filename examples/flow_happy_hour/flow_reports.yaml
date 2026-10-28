@@ -1,0 +1,365 @@
+# Flow Power reports: Live / Days / Months / Bill (Home Assistant package)
+# Mirrors the Flow Power app's tiles from local meters, plus a running bill.
+# Needs flow_happy_hour.yaml (hh_export_window, hh_import_total) and, for the
+# PEA figures, flow_power_prices.yaml. Views are in dashboard.yaml.
+#
+# Flow's maths (matches the app):
+#   export earnings  = min(window, cap) x high rate + max(window - cap, 0) x low rate
+#   total adjustment = usage kWh x PEA / 100 - export earnings   (negative = credit)
+#   estimated bill   = usage x import rate + days x supply + total adjustment
+# PEA here is Flow's 30-day rolling figure (provisional, not per day/month/bill).
+#
+# How periods work: counters only go up (import, export, Happy Hour kWh and $).
+# sensor.flow_energy_log snapshots them at 00:00 daily (last 100 days + every
+# 1st of the month for 25 months). A period = snapshot at its end (or now) -
+# snapshot at its start, so any day, month or bill start can be looked up.
+# Helpers have no `initial`, so edits survive restarts.
+# Replace "fox_ess_inverter" with your device slug, as in flow_happy_hour.yaml.
+
+input_number:
+  # Tariff (Endeavour, Oct 2026 defaults set by flow_reports_seed while 0)
+  flow_rate_hh_high: { name: Happy Hour export rate up to cap, min: 0, max: 2,   step: 0.0001, mode: box, unit_of_measurement: "$/kWh" }
+  flow_rate_hh_low:  { name: Happy Hour export rate above cap, min: 0, max: 2,   step: 0.0001, mode: box, unit_of_measurement: "$/kWh" }
+  flow_rate_hh_cap:  { name: Happy Hour high-rate cap per day, min: 0, max: 100, step: 0.1,    mode: box, unit_of_measurement: kWh }
+  flow_rate_import:  { name: Import rate before PEA,          min: 0, max: 2,   step: 0.0001, mode: box, unit_of_measurement: "$/kWh" }
+  flow_rate_supply:  { name: Daily supply charge,             min: 0, max: 10,  step: 0.0001, mode: box, unit_of_measurement: "$/day" }
+  # 0 = unknown (no auto-advance). Learned when you set the bill start by hand.
+  flow_bill_day:     { name: Bill day of month (0 = unknown), min: 0, max: 31,  step: 1,      mode: box }
+  # Lifetime Happy Hour totals (never reset; written at 21:30)
+  flow_hh_high_kwh_total: { name: Happy Hour kWh at high rate (lifetime), min: 0, max: 10000000, step: 0.01, mode: box, unit_of_measurement: kWh }
+  flow_hh_low_kwh_total:  { name: Happy Hour kWh at low rate (lifetime),  min: 0, max: 10000000, step: 0.01, mode: box, unit_of_measurement: kWh }
+  flow_hh_revenue_total:  { name: Happy Hour revenue (lifetime),          min: 0, max: 10000000, step: 0.01, mode: box, unit_of_measurement: "$" }
+  # Bill only: the gap between the bill start and the first snapshot
+  flow_bill_pre_import_kwh:  { name: Before tracking - import,              min: 0, max: 100000, step: 0.01, mode: box, unit_of_measurement: kWh }
+  flow_bill_pre_hh_high_kwh: { name: Before tracking - Happy Hour high kWh, min: 0, max: 100000, step: 0.01, mode: box, unit_of_measurement: kWh }
+  flow_bill_pre_hh_low_kwh:  { name: Before tracking - Happy Hour low kWh,  min: 0, max: 100000, step: 0.01, mode: box, unit_of_measurement: kWh }
+  flow_bill_pre_revenue:     { name: Before tracking - Happy Hour revenue,  min: 0, max: 100000, step: 0.01, mode: box, unit_of_measurement: "$" }
+
+input_datetime:
+  flow_view_date:     { name: Report date,            has_date: true, has_time: false }
+  flow_bill_start:    { name: Bill start,             has_date: true, has_time: false }
+  flow_hh_last_close: { name: Happy Hour last closed, has_date: true, has_time: false }
+
+utility_meter:
+  # Never-resetting export total (the daily sensor resets at midnight)
+  flow_export_total:
+    source: sensor.fox_ess_inverter_daily_feed_in
+
+template:
+  # Snapshot row: [import, export, hh high kWh, hh low kWh, hh $] keyed by date.
+  # On start, today's row is added if missing and Happy Hour hasn't closed yet.
+  - triggers:
+      - { trigger: time, at: "00:00:10", id: midnight }
+      - { trigger: homeassistant, event: start, id: start }
+    sensor:
+      - name: Flow energy log
+        unique_id: flow_energy_log
+        icon: mdi:notebook-outline
+        state: "{{ now().date() | string }}"
+        attributes:
+          days: >
+            {% set old = this.attributes.get('days', {}) %}
+            {% set today = now().date() | string %}
+            {% set add = has_value('sensor.hh_import_total') and has_value('sensor.flow_export_total')
+                         and (trigger.id == 'midnight' or (today not in old and now() < today_at('17:30'))) %}
+            {% set row = [states('sensor.hh_import_total') | float(0), states('sensor.flow_export_total') | float(0),
+                          states('input_number.flow_hh_high_kwh_total') | float(0), states('input_number.flow_hh_low_kwh_total') | float(0),
+                          states('input_number.flow_hh_revenue_total') | float(0)] %}
+            {% set new = dict(old, **{today: row}) if add else old %}
+            {% set keys = new | list | sort %}
+            {% set keep = keys[-100:] + (keys | select('match', '.*-01$') | list)[-25:] %}
+            {% set ns = namespace(d={}) %}
+            {% for k in keys if k in keep %}{% set ns.d = dict(ns.d, **{k: new[k]}) %}{% endfor %}
+            {{ ns.d }}
+
+  - sensor:
+      # ---- Periods. Attribute v = {from, partial, r: [usage, export, hh high, hh low, hh $]}.
+      # Snapshot used = first one on/after the date; none -> live counters.
+      - name: Flow day
+        unique_id: flow_day
+        icon: mdi:calendar-today
+        state: "{{ (state_attr('input_datetime.flow_view_date', 'timestamp') | float(0) + 43200) | timestamp_custom('%a %-d %b %Y') }}"
+        attributes:
+          v: >
+            {% set log = state_attr('sensor.flow_energy_log', 'days') or {} %}
+            {% set keys = log | list | sort %}
+            {% set live = [states('sensor.hh_import_total') | float(0), states('sensor.flow_export_total') | float(0),
+                           states('input_number.flow_hh_high_kwh_total') | float(0), states('input_number.flow_hh_low_kwh_total') | float(0),
+                           states('input_number.flow_hh_revenue_total') | float(0)] %}
+            {% set ts = state_attr('input_datetime.flow_view_date', 'timestamp') | float(0) %}
+            {% set a = (ts + 43200) | timestamp_custom('%Y-%m-%d') %}
+            {% set b = (ts + 129600) | timestamp_custom('%Y-%m-%d') %}
+            {% set ka = keys | select('>=', a) | first | default('') %}
+            {% set kb = keys | select('>=', b) | first | default('') %}
+            {% set A = log[ka] if ka else live %}{% set B = log[kb] if kb else live %}
+            {% set ns = namespace(r=[]) %}{% for i in range(5) %}{% set ns.r = ns.r + [(B[i] - A[i]) | round(2)] %}{% endfor %}
+            {{ {'from': ka or a, 'partial': ka != a, 'r': ns.r} }}
+
+      - name: Flow month
+        unique_id: flow_month
+        icon: mdi:calendar-month
+        state: "{{ (state_attr('input_datetime.flow_view_date', 'timestamp') | float(0) + 43200) | timestamp_custom('%B %Y') }}"
+        attributes:
+          v: >
+            {% set log = state_attr('sensor.flow_energy_log', 'days') or {} %}
+            {% set keys = log | list | sort %}
+            {% set live = [states('sensor.hh_import_total') | float(0), states('sensor.flow_export_total') | float(0),
+                           states('input_number.flow_hh_high_kwh_total') | float(0), states('input_number.flow_hh_low_kwh_total') | float(0),
+                           states('input_number.flow_hh_revenue_total') | float(0)] %}
+            {% set d = (state_attr('input_datetime.flow_view_date', 'timestamp') | float(0) + 43200) | timestamp_custom('%Y-%m-%d') %}
+            {% set mi = d[:4] | int * 12 + d[5:7] | int %}
+            {% set a = d[:8] ~ '01' %}
+            {% set b = '%04d-%02d-01' | format(mi // 12, mi % 12 + 1) %}
+            {% set ka = keys | select('>=', a) | first | default('') %}
+            {% set kb = keys | select('>=', b) | first | default('') %}
+            {% set A = log[ka] if ka else live %}{% set B = log[kb] if kb else live %}
+            {% set ns = namespace(r=[]) %}{% for i in range(5) %}{% set ns.r = ns.r + [(B[i] - A[i]) | round(2)] %}{% endfor %}
+            {{ {'from': ka or a, 'partial': ka != a, 'r': ns.r} }}
+
+      - name: Flow bill
+        unique_id: flow_bill
+        icon: mdi:receipt-text-outline
+        state: "{{ state_attr('input_datetime.flow_bill_start', 'timestamp') | float(0) | timestamp_custom('since %-d %b %Y') }}"
+        attributes:
+          v: >
+            {% set log = state_attr('sensor.flow_energy_log', 'days') or {} %}
+            {% set keys = log | list | sort %}
+            {% set live = [states('sensor.hh_import_total') | float(0), states('sensor.flow_export_total') | float(0),
+                           states('input_number.flow_hh_high_kwh_total') | float(0), states('input_number.flow_hh_low_kwh_total') | float(0),
+                           states('input_number.flow_hh_revenue_total') | float(0)] %}
+            {% set a = states('input_datetime.flow_bill_start') %}
+            {% set ka = keys | select('>=', a) | first | default('') %}
+            {% set A = log[ka] if ka else live %}
+            {# Bill start before the first snapshot: take off the "before tracking" helpers #}
+            {% set pre = 1 if ka and ka == keys[0] and a < ka else 0 %}
+            {% set P = [states('input_number.flow_bill_pre_import_kwh') | float(0), 0,
+                        states('input_number.flow_bill_pre_hh_high_kwh') | float(0), states('input_number.flow_bill_pre_hh_low_kwh') | float(0),
+                        states('input_number.flow_bill_pre_revenue') | float(0)] %}
+            {% set ns = namespace(r=[]) %}{% for i in range(5) %}{% set ns.r = ns.r + [(live[i] - A[i] + pre * P[i]) | round(2)] %}{% endfor %}
+            {{ {'from': ka or a, 'partial': ka != a and not pre, 'r': ns.r} }}
+
+      # ---- Tiles (Days / Months / Bill views)
+      - { name: Flow day usage,        unique_id: flow_day_usage,        unit_of_measurement: kWh, device_class: energy, state: "{% set v = state_attr('sensor.flow_day', 'v') %}{{ v.r[0] if v else none }}" }
+      - { name: Flow day export,       unique_id: flow_day_export,       unit_of_measurement: kWh, device_class: energy, state: "{% set v = state_attr('sensor.flow_day', 'v') %}{{ v.r[1] if v else none }}" }
+      - { name: Flow day peak export,  unique_id: flow_day_peak_export,  unit_of_measurement: kWh, device_class: energy, state: "{% set v = state_attr('sensor.flow_day', 'v') %}{{ (v.r[2] + v.r[3]) | round(2) if v else none }}" }
+      - { name: Flow day earnings,     unique_id: flow_day_earnings,     unit_of_measurement: AUD, device_class: monetary, state: "{% set v = state_attr('sensor.flow_day', 'v') %}{{ v.r[4] if v else none }}" }
+      - name: Flow day adjustment
+        unique_id: flow_day_adjustment
+        unit_of_measurement: AUD
+        device_class: monetary
+        state: >
+          {% set v = state_attr('sensor.flow_day', 'v') %}{% set pea = states('sensor.flow_pea_30_days') %}
+          {{ (v.r[0] * pea | float / 100 - v.r[4]) | round(2) if v and is_number(pea) else none }}
+
+      - { name: Flow month usage,       unique_id: flow_month_usage,       unit_of_measurement: kWh, device_class: energy, state: "{% set v = state_attr('sensor.flow_month', 'v') %}{{ v.r[0] if v else none }}" }
+      - { name: Flow month export,      unique_id: flow_month_export,      unit_of_measurement: kWh, device_class: energy, state: "{% set v = state_attr('sensor.flow_month', 'v') %}{{ v.r[1] if v else none }}" }
+      - { name: Flow month peak export, unique_id: flow_month_peak_export, unit_of_measurement: kWh, device_class: energy, state: "{% set v = state_attr('sensor.flow_month', 'v') %}{{ (v.r[2] + v.r[3]) | round(2) if v else none }}" }
+      - { name: Flow month earnings,    unique_id: flow_month_earnings,    unit_of_measurement: AUD, device_class: monetary, state: "{% set v = state_attr('sensor.flow_month', 'v') %}{{ v.r[4] if v else none }}" }
+      - name: Flow month adjustment
+        unique_id: flow_month_adjustment
+        unit_of_measurement: AUD
+        device_class: monetary
+        state: >
+          {% set v = state_attr('sensor.flow_month', 'v') %}{% set pea = states('sensor.flow_pea_30_days') %}
+          {{ (v.r[0] * pea | float / 100 - v.r[4]) | round(2) if v and is_number(pea) else none }}
+
+      - name: Flow bill days
+        unique_id: flow_bill_days
+        unit_of_measurement: d
+        # Includes today: supply is charged for every day of the period
+        state: >
+          {% set s = state_attr('input_datetime.flow_bill_start', 'timestamp') %}
+          {{ ((as_timestamp(today_at()) - s) / 86400) | round(0) | int + 1 if s is number else none }}
+      - { name: Flow bill usage,        unique_id: flow_bill_usage,        unit_of_measurement: kWh, device_class: energy, state: "{% set v = state_attr('sensor.flow_bill', 'v') %}{{ v.r[0] if v else none }}" }
+      - { name: Flow bill peak export,  unique_id: flow_bill_peak_export,  unit_of_measurement: kWh, device_class: energy, state: "{% set v = state_attr('sensor.flow_bill', 'v') %}{{ (v.r[2] + v.r[3]) | round(2) if v else none }}" }
+      - { name: Flow bill earnings,     unique_id: flow_bill_earnings,     unit_of_measurement: AUD, device_class: monetary, state: "{% set v = state_attr('sensor.flow_bill', 'v') %}{{ v.r[4] if v else none }}" }
+      - { name: Flow bill usage cost,   unique_id: flow_bill_usage_cost,   unit_of_measurement: AUD, device_class: monetary, state: "{{ (states('sensor.flow_bill_usage') | float(0) * states('input_number.flow_rate_import') | float(0)) | round(2) }}" }
+      - { name: Flow bill supply,       unique_id: flow_bill_supply,       unit_of_measurement: AUD, device_class: monetary, state: "{{ (states('sensor.flow_bill_days') | int(0) * states('input_number.flow_rate_supply') | float(0)) | round(2) }}" }
+      - name: Flow bill adjustment
+        unique_id: flow_bill_adjustment
+        unit_of_measurement: AUD
+        device_class: monetary
+        state: >
+          {% set v = state_attr('sensor.flow_bill', 'v') %}{% set pea = states('sensor.flow_pea_30_days') %}
+          {{ (v.r[0] * pea | float / 100 - v.r[4]) | round(2) if v and is_number(pea) else none }}
+      # Negative = credit
+      - name: Flow bill estimate
+        unique_id: flow_bill_estimate
+        unit_of_measurement: AUD
+        device_class: monetary
+        state: >
+          {{ (states('sensor.flow_bill_usage_cost') | float + states('sensor.flow_bill_supply') | float
+              + states('sensor.flow_bill_adjustment') | float) | round(2)
+             if has_value('sensor.flow_bill_adjustment') and has_value('sensor.flow_bill_usage_cost') else none }}
+
+      # ---- Live view
+      - name: Flow Happy Hour earnings tonight
+        unique_id: flow_hh_tonight_earnings
+        unit_of_measurement: AUD
+        device_class: monetary
+        # Window counter resets at 17:30; before that, tonight hasn't started
+        state: >
+          {% set k = states('sensor.hh_export_window') | float(0) if now() >= today_at('17:30') else 0 %}
+          {% set cap = states('input_number.flow_rate_hh_cap') | float(15) %}
+          {{ ([k, cap] | min * states('input_number.flow_rate_hh_high') | float(0)
+              + [k - cap, 0] | max * states('input_number.flow_rate_hh_low') | float(0)) | round(2) }}
+
+      # ---- Long-term statistics for the daily/monthly bar charts
+      - name: Flow Happy Hour export total
+        unique_id: flow_hh_export_total
+        unit_of_measurement: kWh
+        device_class: energy
+        state_class: total_increasing
+        state: "{{ (states('input_number.flow_hh_high_kwh_total') | float(0) + states('input_number.flow_hh_low_kwh_total') | float(0)) | round(2) }}"
+      - name: Flow Happy Hour earnings total
+        unique_id: flow_hh_earnings_total
+        unit_of_measurement: AUD
+        device_class: monetary
+        state_class: total
+        state: "{{ states('input_number.flow_hh_revenue_total') | float(0) | round(2) }}"
+
+script:
+  # Move the report date: days: -1/1, months: -1/1 (to the 1st), or today: true. Never past today.
+  flow_view_shift:
+    alias: Flow reports - change date
+    mode: queued
+    fields:
+      days: { description: Days to move }
+      months: { description: Months to move (lands on the 1st) }
+      today: { description: Jump to today }
+    sequence:
+      - variables:
+          ts: "{{ state_attr('input_datetime.flow_view_date', 'timestamp') | float(as_timestamp(today_at())) + 43200 }}"
+          target: >
+            {% set d = ts | timestamp_custom('%Y-%m-%d') %}
+            {% if today | default(false) %}{{ now().date() }}
+            {% elif months | default(0) | int != 0 %}
+              {% set mi = d[:4] | int * 12 + d[5:7] | int - 1 + months | int %}{{ '%04d-%02d-01' | format(mi // 12, mi % 12 + 1) }}
+            {% else %}{{ (ts + days | default(0) | int * 86400) | timestamp_custom('%Y-%m-%d') }}{% endif %}
+      - action: input_datetime.set_datetime
+        target: { entity_id: input_datetime.flow_view_date }
+        data: { date: "{{ [target | string, now().date() | string] | min }}" }
+
+automation:
+  # Default rates while still 0; report date and bill start if not set yet
+  - id: flow_reports_seed
+    alias: Flow reports - seed defaults
+    triggers:
+      - { trigger: homeassistant, event: start }
+      - { trigger: event, event_type: automation_reloaded }
+    actions:
+      - repeat:
+          for_each:
+            - { entity: input_number.flow_rate_hh_high, value: 0.35 }
+            - { entity: input_number.flow_rate_hh_low,  value: 0.10 }
+            - { entity: input_number.flow_rate_hh_cap,  value: 15 }
+            - { entity: input_number.flow_rate_import,  value: 0.4226 }
+            - { entity: input_number.flow_rate_supply,  value: 2.2256 }
+          sequence:
+            - if: "{{ states(repeat.item.entity) | float(0) == 0 }}"
+              then:
+                - action: input_number.set_value
+                  target: { entity_id: "{{ repeat.item.entity }}" }
+                  data: { value: "{{ repeat.item.value }}" }
+      - if: "{{ state_attr('input_datetime.flow_view_date', 'year') | int(0) < 2000 }}"
+        then:
+          - action: input_datetime.set_datetime
+            target: { entity_id: input_datetime.flow_view_date }
+            data: { date: "{{ now().date() }}" }
+      - if: "{{ state_attr('input_datetime.flow_bill_start', 'year') | int(0) < 2000 }}"
+        then:
+          - action: input_datetime.set_datetime
+            target: { entity_id: input_datetime.flow_bill_start }
+            data: { date: "{{ now().date() }}" }
+          - action: notify.notify
+            data:
+              title: Flow reports
+              message: >
+                Set the bill start to your last bill's start (or your switch date if no bill yet),
+                and fill the "Before tracking" helpers for the days before today.
+
+  # Back to today at midnight, so the Days view doesn't stay on an old date
+  - id: flow_reports_view_today
+    alias: Flow reports - report date to today
+    triggers: [{ trigger: time, at: "00:00:20" }]
+    actions:
+      - action: input_datetime.set_datetime
+        target: { entity_id: input_datetime.flow_view_date }
+        data: { date: "{{ now().date() }}" }
+
+  # 21:30 - refresh, then add tonight's Happy Hour to the lifetime totals (once per window)
+  - id: flow_bill_close_happy_hour
+    alias: Flow bill - add Happy Hour
+    mode: single
+    triggers:
+      - { trigger: time, at: "21:30:00" }
+      # Catch-up if HA was down at 21:30. Only before 06:00, while the window
+      # counter can't yet hold 0c morning solar export.
+      - { trigger: homeassistant, event: start }
+    variables:
+      window_day: "{{ (now() if now() >= today_at('17:30') else now() - timedelta(days=1)).date() | string }}"
+    conditions:
+      - "{{ now() >= today_at('21:30') or now() < today_at('06:00') }}"
+      - "{{ states('input_datetime.flow_hh_last_close') != window_day }}"
+    actions:
+      - action: button.press
+        target: { entity_id: button.fox_ess_inverter_refresh_all_data }
+        continue_on_error: true
+      - delay: "00:01:00"
+      - wait_template: "{{ has_value('sensor.hh_export_window') }}"
+        timeout: "00:05:00"
+        continue_on_timeout: false
+      - variables:
+          kwh: "{{ states('sensor.hh_export_window') | float(0) }}"
+          cap: "{{ states('input_number.flow_rate_hh_cap') | float(15) }}"
+          high: "{{ [kwh, cap] | min }}"
+          low: "{{ [kwh - cap, 0] | max }}"
+          amount: >
+            {{ high * states('input_number.flow_rate_hh_high') | float(0)
+               + low * states('input_number.flow_rate_hh_low') | float(0) }}
+      - action: input_number.set_value
+        target: { entity_id: input_number.flow_hh_high_kwh_total }
+        data: { value: "{{ (states('input_number.flow_hh_high_kwh_total') | float(0) + high) | round(2) }}" }
+      - action: input_number.set_value
+        target: { entity_id: input_number.flow_hh_low_kwh_total }
+        data: { value: "{{ (states('input_number.flow_hh_low_kwh_total') | float(0) + low) | round(2) }}" }
+      - action: input_number.set_value
+        target: { entity_id: input_number.flow_hh_revenue_total }
+        data: { value: "{{ (states('input_number.flow_hh_revenue_total') | float(0) + amount) | round(2) }}" }
+      - action: input_datetime.set_datetime
+        target: { entity_id: input_datetime.flow_hh_last_close }
+        data: { date: "{{ window_day }}" }
+
+  # You set the bill start by hand -> learn the bill day for monthly auto-advance
+  - id: flow_bill_learn_day
+    alias: Flow bill - learn bill day
+    triggers: [{ trigger: state, entity_id: input_datetime.flow_bill_start }]
+    conditions:
+      - "{{ trigger.to_state.context.user_id is not none and state_attr('input_datetime.flow_bill_start', 'day') is number }}"
+    actions:
+      - action: input_number.set_value
+        target: { entity_id: input_number.flow_bill_day }
+        data: { value: "{{ state_attr('input_datetime.flow_bill_start', 'day') }}" }
+
+  # Bill day - summarise the closing period, then move the bill start to today
+  - id: flow_bill_reset
+    alias: Flow bill - new period on bill day
+    triggers: [{ trigger: time, at: "00:00:30" }]
+    variables:
+      bill_day: >
+        {% set last = ((now().replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)).day %}
+        {{ [states('input_number.flow_bill_day') | int(0), last] | min }}
+    conditions:
+      - "{{ bill_day > 0 and now().day == bill_day and states('input_datetime.flow_bill_start') != now().date() | string }}"
+    actions:
+      - action: notify.notify
+        data:
+          title: Flow bill period closed (estimate)
+          message: >
+            {{ states('input_datetime.flow_bill_start') }} to yesterday ({{ states('sensor.flow_bill_days') | int(1) - 1 }} days):
+            usage {{ states('sensor.flow_bill_usage') }} kWh, Happy Hour {{ states('sensor.flow_bill_peak_export') }} kWh / ${{ states('sensor.flow_bill_earnings') }},
+            estimated bill ${{ (states('sensor.flow_bill_estimate') | float(0) - states('input_number.flow_rate_supply') | float(0)) | round(2) }} (negative = credit).
+            If the bill's dates differ, set the bill start to match: figures recalculate.
+      - action: input_datetime.set_datetime
+        target: { entity_id: input_datetime.flow_bill_start }
+        data: { date: "{{ now().date() }}" }

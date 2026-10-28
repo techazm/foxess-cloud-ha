@@ -38,19 +38,24 @@ Cloud API budget: 2 schedule writes/day (4 calls each) + 1 forced refresh. Well 
 4. Optional: add a PV forecast. The YAML uses the built-in **Forecast.Solar** sensor `sensor.energy_production_tomorrow` (Settings -> Devices & services -> Add -> Forecast.Solar). For Solcast (HACS, more accurate), replace it with `sensor.solcast_pv_forecast_forecast_tomorrow`. Without a forecast the package still works; it just can't hold extra back before cloudy days.
 5. In **Developer Tools -> Actions**, run `foxess_cloud.get_schedule` (Return response) and confirm `properties` lists `fdsoc`/`fdpwr`/`secondworkmode`. On a KH10, `fd_pwr` max is 10500 W and SoC fields can't go below 10%.
 6. Optional: add `flow_power_prices.yaml` for price-spike handling (see below).
-7. Optional: add `flow_bill.yaml` for "since last bill" figures (see below).
+7. Optional: add `flow_reports.yaml` for Flow-app-style Live / Days / Months / Bill reports (see below).
 8. Optional: add the dashboard (see below).
 9. Turn on `input_boolean.hh_dry_run` and `input_boolean.hh_enabled`, watch the notifications for 2-3 days, then turn dry run off.
 
 ## Dashboard (`dashboard.yaml`, optional)
 Built-in cards only (no HACS). Settings -> Dashboards -> Add dashboard -> open it -> Edit -> Raw configuration editor, paste the file, then replace `fox_ess_inverter` with your slug.
 
-| Section | Shows |
+Tabs (views) along the top, the first four laid out like the Flow Power app (two tiles per row):
+
+| Tab | Shows |
 |---|---|
-| Tonight | Live status line (what the optimiser does next), key numbers, battery and export gauges |
-| Graphs | Battery vs reserve / armed cut-off / 08:00 target (24 h), export vs 35c cap (24 h), wholesale price + spikes (48 h), daily export/import/load bars (14 days) |
-| Since last bill | Happy Hour kWh and $ at each rate, import, supply, net, PEA estimate; bill start, rates and running totals (needs `flow_bill.yaml`) |
-| Controls | On/off, dry run and every tuning helper; Flow Power prices and PEA; logbook of automation runs and margin changes |
+| Live | Battery, wholesale price, export/import/load/solar power; today's export since 17:30, earnings tonight, total export and usage; 24 h demand vs price |
+| Days | Pick a day (Previous / Today / Next or a date picker): exported 5:30-9:30pm, export earnings, exported in total, usage, price adjustment (PEA), total adjustment; 14-day bars |
+| Months | Same tiles for the month; monthly comparison bars (12 months) |
+| Bill | Since the bill start: usage and charge, supply, Happy Hour kWh and earnings, total adjustment, estimated bill; rates and bill settings |
+| Happy Hour | Optimiser status (Tonight), graphs, controls, Flow prices and PEA, logbook |
+
+Live / Days / Months / Bill need `flow_reports.yaml`; PEA and price tiles need `flow_power_prices.yaml`.
 
 The logbook uses automation entity IDs derived from the aliases (e.g. `automation.happy_hour_arm_tonight`). If you renamed them, update the list.
 
@@ -100,18 +105,21 @@ Uses Flow Power's data API (kWatch) to see wholesale price spikes before they ha
 
 **API notes:** `POST https://api.kwatch.com.au/api/v1/<method>` with header `x-api-key`. Responses are a JSON string containing JSON. Prices are $/MWh. Timestamps are NEM time (+10:00, no daylight saving) and mark the **end** of each interval. Polling: 288 + 144 + 24 calls/day.
 
-## Since last bill (`flow_bill.yaml`, optional)
-A running estimate of the current bill from local meters. Needs `flow_happy_hour.yaml` (`hh_export_window`, `hh_import_total`); `flow_power_prices.yaml` adds the PEA lines.
+## Reports: Live / Days / Months / Bill (`flow_reports.yaml`, optional)
+The Flow Power app's day and month tiles, rebuilt from local meters, plus a running bill. Needs `flow_happy_hour.yaml` (`hh_export_window`, `hh_import_total`); `flow_power_prices.yaml` adds PEA and price. The tabs are in `dashboard.yaml`.
 
-**Nothing is ever zeroed.** The counters only go up, and `sensor.flow_bill_daily_log` snapshots them at 00:00 every day (last 100 days, kept across restarts). "Since last bill" is *counters now - snapshot on `flow_bill_start`*. Moving the bill start, by hand or on bill day, recalculates the whole period exactly from the snapshot for that date. That means you don't need to know the bill date in advance.
-
-| Figure | How |
+**Flow's maths** (checked against the app: 20.85 kWh -> $5.83 for a day; 10.25 kWh usage at -20.74c and $95.87 earnings -> -$97.99 for a month)
+| Tile | How |
 |---|---|
-| Usage | `sensor.flow_bill_import` = `hh_import_total` now - its snapshot on the bill start |
-| Revenue | At 21:30: refresh, wait 1 min, then add `min(window, cap) x high rate + max(window - cap, 0) x low rate` to the lifetime totals `flow_hh_revenue_total`, `flow_hh_high_kwh_total`, `flow_hh_low_kwh_total`. Once per window (`flow_hh_last_close`). `sensor.flow_bill_revenue` / `_happy_hour_high_kwh` / `_low_kwh` = lifetime - snapshot |
-| Cost | `sensor.flow_bill_cost` = import kWh x `flow_rate_import` + `sensor.flow_bill_days` x `flow_rate_supply` (days include today) |
-| Net | `sensor.flow_bill_net` = revenue - cost (positive = credit) |
-| PEA | `sensor.flow_bill_pea_estimate` = import kWh x `sensor.flow_pea_30_days` / 100. Flow's 30-day rolling figure, **not bill-aligned**: an indication only |
+| Exported 5:30-9:30pm | Happy Hour kWh, closed nightly at 21:30 |
+| Export earnings | `min(window, cap) x high rate + max(window - cap, 0) x low rate`, summed per night |
+| Exported in total | All export (`sensor.flow_export_total`, never-resetting meter on daily feed-in) |
+| Electricity usage | Grid import (`hh_import_total`) |
+| Price adjustment | `sensor.flow_pea_30_days`: Flow's **30-day rolling** PEA (provisional), not per day/month like the app |
+| Total adjustment | usage x PEA / 100 - export earnings (negative = credit) |
+| Estimated bill (Bill tab) | usage x import rate + days x supply + total adjustment |
+
+**How periods work.** Counters only go up: import, export, Happy Hour kWh at each rate and $. At 21:30 the automation refreshes, waits a minute and adds tonight's window to the lifetime totals (once per window). `sensor.flow_energy_log` snapshots all counters at 00:00 (last 100 days plus every 1st of the month for 25 months, kept across restarts). A period = snapshot at its end (or now) - snapshot at its start, so any day in the last 100, any month, or any bill start can be shown. Days before tracking began show as "no full data"; the first month is a part month. Bar charts use HA long-term statistics, so they keep history beyond the log.
 
 **Helpers** (no `initial`, so edits survive restarts)
 | Helper | Default | Notes |
@@ -120,28 +128,29 @@ A running estimate of the current bill from local meters. Needs `flow_happy_hour
 | `flow_rate_hh_cap` | 15 kWh | High-rate kWh per day (tariff; separate from the optimiser's `hh_cap_kwh`) |
 | `flow_rate_import` | $0.4226/kWh | Import before PEA |
 | `flow_rate_supply` | $2.2256/day | Daily supply |
+| `flow_view_date` | today | Day/month shown on the Days and Months tabs; back to today at midnight |
 | `flow_bill_start` | today, on first run | Bill start date. Drives the snapshot used and the supply-day count |
 | `flow_bill_day` | 0 (unknown) | Day of month for the monthly auto-advance. Set automatically when you change `flow_bill_start` by hand; 29-31 fall back to the month's last day |
-| `flow_bill_pre_*` | 0 | Import, Happy Hour kWh and $ between the bill start and the first snapshot. Only used while the bill start is earlier than the oldest snapshot |
+| `flow_bill_pre_*` | 0 | Bill tab only: import, Happy Hour kWh and $ between the bill start and the first snapshot |
 
-Default rates are filled in by `flow_bill_seed` only while a rate is 0, so a rate you change in the UI stays changed.
+Default rates are filled in by `flow_reports_seed` only while a rate is 0, so a rate you change in the UI stays changed.
 
-**Bill date not known yet (new customer)**
+**Bill date not known yet (new customer).** Flow bills monthly, but the dates come with the first bill.
 1. Set `flow_bill_start` to your switch date. That also sets `flow_bill_day`, so the period auto-advances monthly on that day.
-2. Fill the `flow_bill_pre_*` helpers for the switch date up to the day you installed the package. Import comes from the Flow app; the nightly Happy Hour kWh are in the history of `sensor.hh_export_window`, as its value at 21:30 each night (split at 15 kWh).
-3. When the first bill arrives, set `flow_bill_start` to the day after the bill's end date. The current period recalculates and the bill day is relearned. Compare the bill's totals with the closing notification.
+2. Fill the `flow_bill_pre_*` helpers for the switch date up to the day you installed the package, from the Flow app (Days tab: usage, exported 5:30-9:30pm, earnings).
+3. When the first bill arrives, set `flow_bill_start` to the day after the bill's end date. The period recalculates from the snapshot for that date and the bill day is relearned.
 
-**Bill day:** at 00:00:30 on `flow_bill_day` it notifies the closing period's totals (estimate), then moves `flow_bill_start` to today. The window closed at 21:30 the night before stays on the old bill. Automatic moves don't relearn the bill day; only your own edits do.
+**Bill day:** at 00:00:30 on `flow_bill_day` it notifies the closing period's estimate, then moves `flow_bill_start` to today. Automatic moves don't relearn the bill day; only your own edits do.
 
-**Fixing by hand:** edit `flow_bill_start` for a missed or moved bill. Edit the lifetime totals for a missing or wrong Happy Hour night (past snapshots don't change, so the correction lands in the current period). If no snapshot exists for the bill start (HA down at midnight), the next day's is used.
+**Fixing by hand:** edit `flow_bill_start` for a missed or moved bill. Edit the lifetime totals for a missing or wrong Happy Hour night (the correction lands in the current day, month and bill). If HA is down at midnight, the next day's snapshot is used. If HA is down at 21:30, the window is closed on the next start, as long as that's before 06:00 (after that the counter may include 0c morning solar export; add the night by hand). Cloud API: +1 refresh/day.
 
-If HA is down at 21:30, the window is closed on the next start, as long as that's before 06:00 (after that the counter may include 0c morning solar export, so the night is skipped; add it to the lifetime totals by hand). Revenue uses the rates in force at 21:30 each night; the dashboard's per-rate $ use today's rates. Cloud API: +1 refresh/day.
+**Upgrading from v1.7 (`flow_bill.yaml`):** delete `flow_bill.yaml` from `config/packages/` before adding `flow_reports.yaml` (same helpers, so rates, bill start and lifetime totals carry over). The snapshot log restarts.
 
 ## Winter
 Around April, switch back to a plan with a free midday window and turn off `hh_enabled`.
 
 ## Not yet included
-- Reconciling actual Happy Hour kWh from the Flow Power API against the local counter.
+- Flow's own per-day/per-month figures (the API used here only exposes a 30-day PEA). Compare the Days/Months tabs with the app.
 
 ## Troubleshooting
 | Symptom | Cause / fix |
@@ -150,6 +159,7 @@ Around April, switch back to a plan with a free midday window and turn off `hh_e
 | `Solar tomorrow` far below what you produce | Forecast.Solar location (lat/long, from HA's home location), modules power (W), inverter size or damping. Set `hh_poor_solar_kwh` to 0 until fixed |
 
 ## Changelog
+- 2026-10-28 - v1.8: Flow-app-style dashboard tabs: Live, Days (pick a day), Months (pick a month), Bill, each with the app's tiles (exported 5:30-9:30pm, export earnings, exported in total, usage, price adjustment, total adjustment) and daily/monthly bar charts. `flow_bill.yaml` becomes `flow_reports.yaml`; snapshots now include export; adjustment and estimated bill use Flow's sign convention (negative = credit).
 - 2026-10-28 - v1.7: optional `flow_bill.yaml` and a *Since last bill* dashboard section: import kWh, Happy Hour kWh and $ at each rate (closed nightly at 21:30), supply, net, and a PEA estimate labelled as 30-day rolling. Lifetime counters plus a daily snapshot log, so the bill start can be set or moved at any time (no need to know the bill date in advance); the bill day is learned from manual edits. Rates are helpers.
 - 2026-10-12 - v1.6.1: Flow Power sensors go `unknown` on API errors (e.g. rejected key) instead of failing to load with a template error; troubleshooting section.
 - 2026-10-12 - v1.6: optional `dashboard.yaml` (status, gauges, history/statistics graphs, controls, logbook) using built-in cards.
