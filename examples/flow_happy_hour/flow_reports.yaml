@@ -48,9 +48,11 @@ utility_meter:
 template:
   # Snapshot row: [import, export, hh high kWh, hh low kWh, hh $] keyed by date.
   # On start, today's row is added if missing and Happy Hour hasn't closed yet.
+  # script.flow_reports_backfill adds older rows (existing rows always win).
   - triggers:
       - { trigger: time, at: "00:00:10", id: midnight }
       - { trigger: homeassistant, event: start, id: start }
+      - { trigger: event, event_type: flow_energy_log_import, id: import }
     sensor:
       - name: Flow energy log
         unique_id: flow_energy_log
@@ -58,7 +60,8 @@ template:
         state: "{{ now().date() | string }}"
         attributes:
           days: >
-            {% set old = this.attributes.get('days', {}) %}
+            {% set imported = trigger.event.data.get('days', {}) if trigger.id == 'import' else {} %}
+            {% set old = dict(imported, **this.attributes.get('days', {})) %}
             {% set today = now().date() | string %}
             {% set add = has_value('sensor.hh_import_total') and has_value('sensor.flow_export_total')
                          and (trigger.id == 'midnight' or (today not in old and now() < today_at('17:30'))) %}
@@ -93,7 +96,7 @@ template:
             {% set kb = keys | select('>=', b) | first | default('') %}
             {% set A = log[ka] if ka else live %}{% set B = log[kb] if kb else live %}
             {% set ns = namespace(r=[]) %}{% for i in range(5) %}{% set ns.r = ns.r + [(B[i] - A[i]) | round(2)] %}{% endfor %}
-            {{ {'from': ka or a, 'partial': ka != a, 'r': ns.r} }}
+            {{ {'from': ka or 'none', 'partial': ka != a, 'r': ns.r} }}
 
       - name: Flow month
         unique_id: flow_month
@@ -114,7 +117,7 @@ template:
             {% set kb = keys | select('>=', b) | first | default('') %}
             {% set A = log[ka] if ka else live %}{% set B = log[kb] if kb else live %}
             {% set ns = namespace(r=[]) %}{% for i in range(5) %}{% set ns.r = ns.r + [(B[i] - A[i]) | round(2)] %}{% endfor %}
-            {{ {'from': ka or a, 'partial': ka != a, 'r': ns.r} }}
+            {{ {'from': ka or 'none', 'partial': ka != a, 'r': ns.r} }}
 
       - name: Flow bill
         unique_id: flow_bill
@@ -136,7 +139,7 @@ template:
                         states('input_number.flow_bill_pre_hh_high_kwh') | float(0), states('input_number.flow_bill_pre_hh_low_kwh') | float(0),
                         states('input_number.flow_bill_pre_revenue') | float(0)] %}
             {% set ns = namespace(r=[]) %}{% for i in range(5) %}{% set ns.r = ns.r + [(live[i] - A[i] + pre * P[i]) | round(2)] %}{% endfor %}
-            {{ {'from': ka or a, 'partial': ka != a and not pre, 'r': ns.r} }}
+            {{ {'from': ka or 'none', 'partial': ka != a and not pre, 'r': ns.r} }}
 
       # ---- Tiles (Days / Months / Bill views)
       - { name: Flow day usage,        unique_id: flow_day_usage,        unit_of_measurement: kWh, device_class: energy, state: "{% set v = state_attr('sensor.flow_day', 'v') %}{{ v.r[0] if v else none }}" }
@@ -192,6 +195,67 @@ template:
               + states('sensor.flow_bill_adjustment') | float) | round(2)
              if has_value('sensor.flow_bill_adjustment') and has_value('sensor.flow_bill_usage_cost') else none }}
 
+      # ---- Bill forecast: through yesterday + last-14-complete-days average x days left
+      # (incl. today). Period ends the day before the next bill day (or a month after
+      # the bill start). Fewer than 14 days logged: uses what there is, else the bill so far.
+      # State: period end date; attribute f holds the forecast
+      - name: Flow bill forecast
+        unique_id: flow_bill_forecast
+        icon: mdi:crystal-ball
+        state: >
+          {% set s = states('input_datetime.flow_bill_start') %}
+          {% if s[:2] == '20' %}
+            {% set start = strptime(s, '%Y-%m-%d') %}
+            {% set bd = states('input_number.flow_bill_day') | int(0) or start.day %}
+            {% set mi = start.year * 12 + start.month %}
+            {% set last = (strptime('%04d-%02d-01' | format((mi + 1) // 12, (mi + 1) % 12 + 1), '%Y-%m-%d') - timedelta(days=1)).day %}
+            {{ (strptime('%04d-%02d-%02d' | format(mi // 12, mi % 12 + 1, [bd, last] | min), '%Y-%m-%d') - timedelta(days=1)).date() }}
+          {% else %}unknown{% endif %}
+        attributes:
+          f: >
+            {% set v = state_attr('sensor.flow_bill', 'v') %}
+            {% set s = states('input_datetime.flow_bill_start') %}
+            {% if v and s[:2] == '20' %}
+              {% set log = state_attr('sensor.flow_energy_log', 'days') or {} %}
+              {% set keys = log | list | sort %}
+              {% set live = [states('sensor.hh_import_total') | float(0), states('sensor.flow_export_total') | float(0),
+                             states('input_number.flow_hh_high_kwh_total') | float(0), states('input_number.flow_hh_low_kwh_total') | float(0),
+                             states('input_number.flow_hh_revenue_total') | float(0)] %}
+              {% set today = strptime(now().date() | string, '%Y-%m-%d') %}
+              {% set t = today.date() | string %}
+              {% set St = log[t] if t in log else live %}
+              {# Period end: day before the next bill day #}
+              {% set start = strptime(s, '%Y-%m-%d') %}
+              {% set bd = states('input_number.flow_bill_day') | int(0) or start.day %}
+              {% set mi = start.year * 12 + start.month %}
+              {% set last = (strptime('%04d-%02d-01' | format((mi + 1) // 12, (mi + 1) % 12 + 1), '%Y-%m-%d') - timedelta(days=1)).day %}
+              {% set end_ex = strptime('%04d-%02d-%02d' | format(mi // 12, mi % 12 + 1, [bd, last] | min), '%Y-%m-%d') %}
+              {% set days_total = (end_ex - start).days %}
+              {% set days_left = [(end_ex - today).days, 0] | max %}
+              {# Bill so far through yesterday #}
+              {% set past = namespace(r=[]) %}{% for i in range(5) %}{% set past.r = past.r + [v.r[i] - (live[i] - St[i])] %}{% endfor %}
+              {# Daily average over up to 14 complete days #}
+              {% set k = keys | select('>=', (today - timedelta(days=14)).date() | string) | first | default('') %}
+              {% set n = (today - strptime(k, '%Y-%m-%d')).days if k and k < t else 0 %}
+              {% set done = (today - start).days %}
+              {% set avg = namespace(r=[]) %}
+              {% for i in range(5) %}
+                {% set avg.r = avg.r + [((St[i] - log[k][i]) / n) if n > 0 else (past.r[i] / done if done > 0 else 0)] %}
+              {% endfor %}
+              {% set fc = namespace(r=[]) %}{% for i in range(5) %}{% set fc.r = fc.r + [past.r[i] + avg.r[i] * days_left] %}{% endfor %}
+              {% set pea = states('sensor.flow_pea_30_days') | float(0) %}
+              {% set supply = days_total * states('input_number.flow_rate_supply') | float(0) %}
+              {% set adj = fc.r[0] * pea / 100 - fc.r[4] %}
+              {{ {'end': (end_ex - timedelta(days=1)).date() | string, 'days_total': days_total, 'days_left': days_left,
+                  'avg_days': n if n > 0 else done, 'usage': fc.r[0] | round(2), 'hh_kwh': (fc.r[2] + fc.r[3]) | round(2),
+                  'earnings': fc.r[4] | round(2), 'supply': supply | round(2), 'adjustment': adj | round(2),
+                  'bill': (fc.r[0] * states('input_number.flow_rate_import') | float(0) + supply + adj) | round(2)} }}
+            {% else %}{{ none }}{% endif %}
+      - { name: Flow bill forecast total,    unique_id: flow_bill_forecast_total,    unit_of_measurement: AUD, device_class: monetary, state: "{% set f = state_attr('sensor.flow_bill_forecast', 'f') %}{{ f.bill if f else none }}" }
+      - { name: Flow bill forecast earnings, unique_id: flow_bill_forecast_earnings, unit_of_measurement: AUD, device_class: monetary, state: "{% set f = state_attr('sensor.flow_bill_forecast', 'f') %}{{ f.earnings if f else none }}" }
+      - { name: Flow bill forecast usage,    unique_id: flow_bill_forecast_usage,    unit_of_measurement: kWh, device_class: energy,   state: "{% set f = state_attr('sensor.flow_bill_forecast', 'f') %}{{ f.usage if f else none }}" }
+      - { name: Flow bill forecast peak export, unique_id: flow_bill_forecast_peak_export, unit_of_measurement: kWh, device_class: energy, state: "{% set f = state_attr('sensor.flow_bill_forecast', 'f') %}{{ f.hh_kwh if f else none }}" }
+
       # ---- Live view
       - name: Flow Happy Hour earnings tonight
         unique_id: flow_hh_tonight_earnings
@@ -239,6 +303,83 @@ script:
       - action: input_datetime.set_datetime
         target: { entity_id: input_datetime.flow_view_date }
         data: { date: "{{ [target | string, now().date() | string] | min }}" }
+
+  # One-off: rebuild daily snapshots before the first one from HA's long-term
+  # statistics (daily import/export, Happy Hour counter at 22:00/23:00), going
+  # back from the oldest snapshot until a day is missing. Uses today's rates.
+  flow_reports_backfill:
+    alias: Flow reports - backfill from history
+    mode: single
+    fields:
+      from_date: { description: "Earliest day to fill (default: 100 days ago)", example: "2026-10-10" }
+    sequence:
+      - variables:
+          log: "{{ state_attr('sensor.flow_energy_log', 'days') or {} }}"
+          first: "{{ (log | list | sort | first) if log else now().date() | string }}"
+          start: "{{ from_date | default((now() - timedelta(days=100)).date() | string, true) }}"
+      - action: recorder.get_statistics
+        data:
+          statistic_ids: [sensor.fox_ess_inverter_daily_grid_consumption, sensor.fox_ess_inverter_daily_feed_in]
+          start_time: "{{ start }} 00:00:00"
+          end_time: "{{ first }} 00:00:00"
+          period: day
+          types: [change]
+        response_variable: daily
+      - action: recorder.get_statistics
+        data:
+          statistic_ids: [sensor.hh_export_window]
+          start_time: "{{ start }} 00:00:00"
+          end_time: "{{ first }} 00:00:00"
+          period: hour
+          types: [state]
+        response_variable: hourly
+      - variables:
+          rows: >
+            {% set st = daily.statistics %}
+            {% set ns = namespace(imp={}, exp={}, hh={}) %}
+            {% for p in st.get('sensor.fox_ess_inverter_daily_grid_consumption', []) if p.change is number %}
+              {% set ns.imp = dict(ns.imp, **{(as_datetime(p.start) | as_local).date() | string: p.change}) %}{% endfor %}
+            {% for p in st.get('sensor.fox_ess_inverter_daily_feed_in', []) if p.change is number %}
+              {% set ns.exp = dict(ns.exp, **{(as_datetime(p.start) | as_local).date() | string: p.change}) %}{% endfor %}
+            {# Counters keep only the end-of-hour state in long-term statistics (no max) #}
+            {% for p in hourly.statistics.get('sensor.hh_export_window', []) if p.state is number %}
+              {% set t = as_datetime(p.start) | as_local %}
+              {% if t.hour in [21, 22] %}{% set k = t.date() | string %}{% set ns.hh = dict(ns.hh, **{k: [ns.hh.get(k, 0), p.state] | max}) %}{% endif %}
+            {% endfor %}
+            {% set cap = states('input_number.flow_rate_hh_cap') | float(15) %}
+            {% set rh = states('input_number.flow_rate_hh_high') | float(0) %}
+            {% set rl = states('input_number.flow_rate_hh_low') | float(0) %}
+            {% if log %}{% set S = log[first] %}
+            {% else %}
+              {# No snapshot yet: today's start = live counters - today so far #}
+              {% set t = states('sensor.hh_export_window') | float(0) if states('input_datetime.flow_hh_last_close') == first else 0 %}
+              {% set hi = [t, cap] | min %}{% set lo = [t - cap, 0] | max %}
+              {% set S = [states('sensor.hh_import_total') | float(0) - states('sensor.fox_ess_inverter_daily_grid_consumption') | float(0),
+                          states('sensor.flow_export_total') | float(0) - states('sensor.fox_ess_inverter_daily_feed_in') | float(0),
+                          states('input_number.flow_hh_high_kwh_total') | float(0) - hi,
+                          states('input_number.flow_hh_low_kwh_total') | float(0) - lo,
+                          states('input_number.flow_hh_revenue_total') | float(0) - hi * rh - lo * rl] %}
+            {% endif %}
+            {% set out = namespace(d={} if log else {first: S}, S=S, stop=false) %}
+            {% set base = strptime(first, '%Y-%m-%d') %}
+            {% for i in range(1, 101) %}
+              {% set k = (base - timedelta(days=i)).date() | string %}
+              {% if not out.stop and k >= start and k in ns.imp and k in ns.exp and k in ns.hh %}
+                {% set hi = [ns.hh[k], cap] | min %}{% set lo = [ns.hh[k] - cap, 0] | max %}
+                {% set out.S = [out.S[0] - ns.imp[k], out.S[1] - ns.exp[k], out.S[2] - hi, out.S[3] - lo, out.S[4] - hi * rh - lo * rl] %}
+                {% set out.d = dict(out.d, **{k: out.S | map('round', 3) | list}) %}
+              {% else %}{% set out.stop = true %}{% endif %}
+            {% endfor %}
+            {{ out.d }}
+      - event: flow_energy_log_import
+        event_data: { days: "{{ rows }}" }
+      - action: notify.notify
+        data:
+          title: Flow reports backfill
+          message: >
+            {% set k = rows | list | sort %}
+            {{ 'Added ' ~ (k | count) ~ ' days, ' ~ k[0] ~ ' to ' ~ k[-1] ~ '.' if k else 'Nothing to add: no statistics found before ' ~ first ~ '.' }}
+            Days without a Happy Hour reading stop the backfill.
 
 automation:
   # Default rates while still 0; report date and bill start if not set yet
