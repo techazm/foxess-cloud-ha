@@ -113,6 +113,69 @@ views:
               - entity: sensor.hh_load_total
                 name: House load
 
+      # Needs flow_bill.yaml (and flow_power_prices.yaml for the PEA lines)
+      - type: grid
+        cards:
+          - type: heading
+            heading: Since last bill
+          - type: markdown
+            content: |
+              {% set hi = states('sensor.flow_bill_happy_hour_high_kwh') | float(0) %}
+              {% set lo = states('sensor.flow_bill_happy_hour_low_kwh') | float(0) %}
+              {% set imp = states('sensor.flow_bill_import') | float(0) %}
+              {% set days = states('sensor.flow_bill_days') | int(0) %}
+              {% set r_hi = states('input_number.flow_rate_hh_high') | float(0) %}
+              {% set r_lo = states('input_number.flow_rate_hh_low') | float(0) %}
+              {% set r_imp = states('input_number.flow_rate_import') | float(0) %}
+              {% set r_sup = states('input_number.flow_rate_supply') | float(0) %}
+              {% set net = states('sensor.flow_bill_net') | float(0) %}
+              {% set pea = states('sensor.flow_pea_30_days') %}
+              {% set pea_est = states('sensor.flow_bill_pea_estimate') %}
+              Since **{{ state_attr('input_datetime.flow_bill_start', 'timestamp') | timestamp_custom('%-d %b %Y') }}** ({{ days }} days{% if states('input_number.flow_bill_day') | int(0) == 0 %}, bill day not known yet{% endif %}). Happy Hour is added at 21:30 each night.
+              {% if is_state('sensor.flow_bill_baseline', 'none') %}_No snapshot on or after the bill start yet (first one is taken at midnight)._{% endif %}
+              {% if today_at('17:30') <= now() < today_at('21:30') %}Tonight so far: {{ states('sensor.hh_export_window') | float(0) | round(2) }} kWh (not yet added).{% endif %}
+
+              | | kWh | $ |
+              |---|---:|---:|
+              | Happy Hour at {{ (r_hi * 100) | round(2) }}c | {{ hi | round(2) }} | {{ '%.2f' | format(hi * r_hi) }} |
+              | Happy Hour at {{ (r_lo * 100) | round(2) }}c | {{ lo | round(2) }} | {{ '%.2f' | format(lo * r_lo) }} |
+              | **Revenue** | {{ (hi + lo) | round(2) }} | **{{ '%.2f' | format(states('sensor.flow_bill_revenue') | float(0)) }}** |
+              | Import at {{ (r_imp * 100) | round(2) }}c | {{ imp | round(2) }} | -{{ '%.2f' | format(imp * r_imp) }} |
+              | Supply {{ days }} d x ${{ r_sup }} | | -{{ '%.2f' | format(days * r_sup) }} |
+              | **Net** (+ credit / - owing) | | **{{ '%+.2f' | format(net) }}** |
+              | PEA {{ pea }}c/kWh on imports (est.) | | {% if is_number(pea_est) %}{{ '%+.2f' | format(-(pea_est | float)) }}{% else %}n/a{% endif %} |
+              | **Net incl. PEA (est.)** | | {% if is_number(pea_est) %}**{{ '%+.2f' | format(net - pea_est | float) }}**{% else %}n/a{% endif %} |
+
+              _PEA is Flow Power's 30-day rolling figure, not aligned to this bill. The bill uses the PEA for its own period._
+          - type: entities
+            title: Bill settings
+            state_color: false
+            entities:
+              - entity: input_datetime.flow_bill_start
+                name: Bill start (set by hand to correct)
+              - input_number.flow_bill_day
+              - entity: sensor.flow_bill_baseline
+                name: Measured from snapshot
+              - type: section
+                label: Rates
+              - input_number.flow_rate_hh_high
+              - input_number.flow_rate_hh_low
+              - input_number.flow_rate_hh_cap
+              - input_number.flow_rate_import
+              - input_number.flow_rate_supply
+              - type: section
+                label: Before tracking (gap before the first snapshot)
+              - input_number.flow_bill_pre_import_kwh
+              - input_number.flow_bill_pre_hh_high_kwh
+              - input_number.flow_bill_pre_hh_low_kwh
+              - input_number.flow_bill_pre_revenue
+              - type: section
+                label: Lifetime Happy Hour totals
+              - input_number.flow_hh_high_kwh_total
+              - input_number.flow_hh_low_kwh_total
+              - input_number.flow_hh_revenue_total
+              - input_datetime.flow_hh_last_close
+
       - type: grid
         cards:
           - type: heading
@@ -164,4 +227,7 @@ views:
                 - automation.happy_hour_snapshot_21_30
                 - automation.happy_hour_learn_overnight_load
                 - automation.flow_price_spike_forecast
+                - automation.flow_bill_add_happy_hour
+                - automation.flow_bill_new_period_on_bill_day
+                - input_datetime.flow_bill_start
                 - input_number.hh_margin_bump_pct
