@@ -1,10 +1,207 @@
-# Flow Power Happy Hour dashboard (built-in cards only, no HACS).
+# Flow Power dashboard (built-in cards only, no HACS): Live / Days / Months / Bill
+# tabs like the Flow Power app (need flow_reports.yaml), plus the Happy Hour controls.
 # Settings -> Dashboards -> Add dashboard -> open it -> ⋮ -> Edit -> ⋮ -> Raw configuration editor,
 # then paste this file. Replace "fox_ess_inverter" with your device slug.
 # Logbook card: automation entity IDs come from the aliases; check them under
 # Settings -> Automations if a row shows as unknown.
-title: Happy Hour
+title: Flow Power
 views:
+  # Live / Days / Months / Bill need flow_reports.yaml (+ flow_power_prices.yaml for PEA and price)
+  - title: Live
+    path: live
+    icon: mdi:flash
+    type: sections
+    max_columns: 2
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Right now
+          - { type: tile, entity: sensor.fox_ess_inverter_battery_soc, name: Battery, color: green, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_price_now, name: Wholesale price, color: indigo, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.fox_ess_inverter_feed_in_power, name: Exporting, color: deep-orange, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.fox_ess_inverter_grid_consumption_power, name: Importing, color: red, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.fox_ess_inverter_load_power, name: House load, color: blue, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.fox_ess_inverter_pv_power, name: Solar, color: amber, grid_options: { columns: 6 } }
+          - type: heading
+            heading: Today
+          - { type: tile, entity: sensor.hh_export_window, name: Exported since 5:30pm, color: deep-orange, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_happy_hour_earnings_tonight, name: Earnings tonight, color: blue, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.fox_ess_inverter_daily_feed_in, name: Exported in total, color: deep-orange, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.fox_ess_inverter_daily_grid_consumption, name: Electricity usage, color: red, grid_options: { columns: 6 } }
+      - type: grid
+        cards:
+          - type: heading
+            heading: Today's demand and price
+          - type: history-graph
+            hours_to_show: 24
+            entities:
+              - { entity: sensor.fox_ess_inverter_grid_consumption_power, name: Import }
+              - { entity: sensor.fox_ess_inverter_feed_in_power, name: Export }
+              - { entity: sensor.flow_price_now, name: Price }
+
+  - title: Days
+    path: days
+    icon: mdi:calendar-today
+    type: sections
+    max_columns: 2
+    sections:
+      - type: grid
+        cards:
+          - type: entities
+            entities:
+              - { entity: sensor.flow_day, name: Day, icon: mdi:calendar }
+              - type: buttons
+                entities:
+                  - { entity: script.flow_view_shift, name: Previous, icon: mdi:chevron-left, tap_action: { action: perform-action, perform_action: script.flow_view_shift, data: { days: -1 } } }
+                  - { entity: script.flow_view_shift, name: Today, icon: mdi:calendar-today, tap_action: { action: perform-action, perform_action: script.flow_view_shift, data: { today: true } } }
+                  - { entity: script.flow_view_shift, name: Next, icon: mdi:chevron-right, tap_action: { action: perform-action, perform_action: script.flow_view_shift, data: { days: 1 } } }
+              - { entity: input_datetime.flow_view_date, name: Pick a date }
+          - type: heading
+            heading: "Plan: Happy Hour"
+          - { type: tile, entity: sensor.flow_day_peak_export, name: Exported 5:30-9:30pm, icon: mdi:transmission-tower-export, color: deep-orange, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_day_earnings, name: Export earnings, icon: mdi:cash-plus, color: blue, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_day_export, name: Exported in total, icon: mdi:transmission-tower-export, color: blue, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_day_usage, name: Electricity usage, icon: mdi:transmission-tower-import, color: deep-orange, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_pea_30_days, name: Price adjustment (30-day), icon: mdi:percent-outline, color: deep-orange, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_day_adjustment, name: Total adjustment, icon: mdi:scale-balance, color: blue, grid_options: { columns: 6 } }
+          - type: markdown
+            content: >
+              {% set v = state_attr('sensor.flow_day', 'v') %}
+              {% if v and v.partial %}**No full data for this day** (tracking from {{ v.from }}).{% endif %}
+              _Today's Happy Hour is added at 21:30. PEA is Flow's provisional 30-day figure, not this day's;
+              total adjustment = usage x PEA - export earnings (negative = credit)._
+      - type: grid
+        cards:
+          - type: heading
+            heading: Last 14 days
+          - type: statistics-graph
+            title: Energy
+            period: day
+            days_to_show: 14
+            chart_type: bar
+            stat_types: [change]
+            entities:
+              - { entity: sensor.flow_happy_hour_export_total, name: Exported 5:30-9:30pm }
+              - { entity: sensor.flow_export_total, name: Exported in total }
+              - { entity: sensor.hh_import_total, name: Usage }
+          - type: statistics-graph
+            title: Export earnings
+            period: day
+            days_to_show: 14
+            chart_type: bar
+            stat_types: [change]
+            entities:
+              - { entity: sensor.flow_happy_hour_earnings_total, name: Earnings }
+
+  - title: Months
+    path: months
+    icon: mdi:calendar-month
+    type: sections
+    max_columns: 2
+    sections:
+      - type: grid
+        cards:
+          - type: entities
+            entities:
+              - { entity: sensor.flow_month, name: Month, icon: mdi:calendar-month }
+              - type: buttons
+                entities:
+                  - { entity: script.flow_view_shift, name: Previous, icon: mdi:chevron-left, tap_action: { action: perform-action, perform_action: script.flow_view_shift, data: { months: -1 } } }
+                  - { entity: script.flow_view_shift, name: This month, icon: mdi:calendar-today, tap_action: { action: perform-action, perform_action: script.flow_view_shift, data: { today: true } } }
+                  - { entity: script.flow_view_shift, name: Next, icon: mdi:chevron-right, tap_action: { action: perform-action, perform_action: script.flow_view_shift, data: { months: 1 } } }
+          - type: heading
+            heading: "Plan: Happy Hour"
+          - { type: tile, entity: sensor.flow_month_peak_export, name: Exported 5:30-9:30pm, icon: mdi:transmission-tower-export, color: deep-orange, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_month_earnings, name: Export earnings, icon: mdi:cash-plus, color: blue, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_month_export, name: Exported in total, icon: mdi:transmission-tower-export, color: blue, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_month_usage, name: Electricity usage, icon: mdi:transmission-tower-import, color: deep-orange, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_pea_30_days, name: Price adjustment (30-day), icon: mdi:percent-outline, color: deep-orange, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_month_adjustment, name: Total adjustment, icon: mdi:scale-balance, color: blue, grid_options: { columns: 6 } }
+          - type: markdown
+            content: >
+              {% set v = state_attr('sensor.flow_month', 'v') %}
+              {% if v and v.partial %}**Part month:** tracking from {{ v.from }}.{% endif %}
+              _PEA is Flow's provisional 30-day figure; the bill uses the PEA for its own period._
+      - type: grid
+        cards:
+          - type: heading
+            heading: Monthly comparison
+          - type: statistics-graph
+            title: Energy
+            period: month
+            days_to_show: 365
+            chart_type: bar
+            stat_types: [change]
+            entities:
+              - { entity: sensor.flow_happy_hour_export_total, name: Exported 5:30-9:30pm }
+              - { entity: sensor.flow_export_total, name: Exported in total }
+              - { entity: sensor.hh_import_total, name: Usage }
+          - type: statistics-graph
+            title: Export earnings
+            period: month
+            days_to_show: 365
+            chart_type: bar
+            stat_types: [change]
+            entities:
+              - { entity: sensor.flow_happy_hour_earnings_total, name: Earnings }
+
+  - title: Bill
+    path: bill
+    icon: mdi:receipt-text-outline
+    type: sections
+    max_columns: 2
+    sections:
+      - type: grid
+        cards:
+          - type: entities
+            entities:
+              - { entity: sensor.flow_bill, name: Current bill, icon: mdi:calendar-start }
+              - { entity: sensor.flow_bill_days, name: Days so far }
+              - { entity: input_datetime.flow_bill_start, name: Bill start (edit to correct) }
+              - { entity: input_number.flow_bill_day, name: Bill day (0 = not known yet) }
+          - type: heading
+            heading: Since last bill
+          - { type: tile, entity: sensor.flow_bill_usage, name: Electricity usage, icon: mdi:transmission-tower-import, color: deep-orange, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_bill_usage_cost, name: Usage charge, icon: mdi:cash-minus, color: deep-orange, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_bill_peak_export, name: Exported 5:30-9:30pm, icon: mdi:transmission-tower-export, color: blue, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_bill_supply, name: Supply charge, icon: mdi:cash-minus, color: deep-orange, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_bill_earnings, name: Export earnings, icon: mdi:cash-plus, color: blue, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_bill_adjustment, name: Total adjustment, icon: mdi:scale-balance, color: blue, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_bill_estimate, name: Estimated bill (negative = credit), icon: mdi:receipt-text-outline, color: indigo }
+          - type: markdown
+            content: >
+              {% set v = state_attr('sensor.flow_bill', 'v') %}
+              {% if v and v.partial %}**Part period:** tracking from {{ v.from }}; fill the "Before tracking" helpers.{% endif %}
+              _Estimated bill = usage x {{ (states('input_number.flow_rate_import') | float(0) * 100) | round(2) }}c
+              + supply + total adjustment. PEA is the 30-day figure ({{ states('sensor.flow_pea_30_days') }}c/kWh), not this bill's._
+      - type: grid
+        cards:
+          - type: heading
+            heading: Settings
+          - type: entities
+            state_color: false
+            entities:
+              - type: section
+                label: Rates
+              - input_number.flow_rate_hh_high
+              - input_number.flow_rate_hh_low
+              - input_number.flow_rate_hh_cap
+              - input_number.flow_rate_import
+              - input_number.flow_rate_supply
+              - type: section
+                label: Before tracking (gap before the first snapshot)
+              - input_number.flow_bill_pre_import_kwh
+              - input_number.flow_bill_pre_hh_high_kwh
+              - input_number.flow_bill_pre_hh_low_kwh
+              - input_number.flow_bill_pre_revenue
+              - type: section
+                label: Lifetime Happy Hour totals
+              - input_number.flow_hh_high_kwh_total
+              - input_number.flow_hh_low_kwh_total
+              - input_number.flow_hh_revenue_total
+              - input_datetime.flow_hh_last_close
+
   - title: Happy Hour
     path: happy-hour
     type: sections
@@ -112,69 +309,6 @@ views:
                 name: Grid import
               - entity: sensor.hh_load_total
                 name: House load
-
-      # Needs flow_bill.yaml (and flow_power_prices.yaml for the PEA lines)
-      - type: grid
-        cards:
-          - type: heading
-            heading: Since last bill
-          - type: markdown
-            content: |
-              {% set hi = states('sensor.flow_bill_happy_hour_high_kwh') | float(0) %}
-              {% set lo = states('sensor.flow_bill_happy_hour_low_kwh') | float(0) %}
-              {% set imp = states('sensor.flow_bill_import') | float(0) %}
-              {% set days = states('sensor.flow_bill_days') | int(0) %}
-              {% set r_hi = states('input_number.flow_rate_hh_high') | float(0) %}
-              {% set r_lo = states('input_number.flow_rate_hh_low') | float(0) %}
-              {% set r_imp = states('input_number.flow_rate_import') | float(0) %}
-              {% set r_sup = states('input_number.flow_rate_supply') | float(0) %}
-              {% set net = states('sensor.flow_bill_net') | float(0) %}
-              {% set pea = states('sensor.flow_pea_30_days') %}
-              {% set pea_est = states('sensor.flow_bill_pea_estimate') %}
-              Since **{{ state_attr('input_datetime.flow_bill_start', 'timestamp') | timestamp_custom('%-d %b %Y') }}** ({{ days }} days{% if states('input_number.flow_bill_day') | int(0) == 0 %}, bill day not known yet{% endif %}). Happy Hour is added at 21:30 each night.
-              {% if is_state('sensor.flow_bill_baseline', 'none') %}_No snapshot on or after the bill start yet (first one is taken at midnight)._{% endif %}
-              {% if today_at('17:30') <= now() < today_at('21:30') %}Tonight so far: {{ states('sensor.hh_export_window') | float(0) | round(2) }} kWh (not yet added).{% endif %}
-
-              | | kWh | $ |
-              |---|---:|---:|
-              | Happy Hour at {{ (r_hi * 100) | round(2) }}c | {{ hi | round(2) }} | {{ '%.2f' | format(hi * r_hi) }} |
-              | Happy Hour at {{ (r_lo * 100) | round(2) }}c | {{ lo | round(2) }} | {{ '%.2f' | format(lo * r_lo) }} |
-              | **Revenue** | {{ (hi + lo) | round(2) }} | **{{ '%.2f' | format(states('sensor.flow_bill_revenue') | float(0)) }}** |
-              | Import at {{ (r_imp * 100) | round(2) }}c | {{ imp | round(2) }} | -{{ '%.2f' | format(imp * r_imp) }} |
-              | Supply {{ days }} d x ${{ r_sup }} | | -{{ '%.2f' | format(days * r_sup) }} |
-              | **Net** (+ credit / - owing) | | **{{ '%+.2f' | format(net) }}** |
-              | PEA {{ pea }}c/kWh on imports (est.) | | {% if is_number(pea_est) %}{{ '%+.2f' | format(-(pea_est | float)) }}{% else %}n/a{% endif %} |
-              | **Net incl. PEA (est.)** | | {% if is_number(pea_est) %}**{{ '%+.2f' | format(net - pea_est | float) }}**{% else %}n/a{% endif %} |
-
-              _PEA is Flow Power's 30-day rolling figure, not aligned to this bill. The bill uses the PEA for its own period._
-          - type: entities
-            title: Bill settings
-            state_color: false
-            entities:
-              - entity: input_datetime.flow_bill_start
-                name: Bill start (set by hand to correct)
-              - input_number.flow_bill_day
-              - entity: sensor.flow_bill_baseline
-                name: Measured from snapshot
-              - type: section
-                label: Rates
-              - input_number.flow_rate_hh_high
-              - input_number.flow_rate_hh_low
-              - input_number.flow_rate_hh_cap
-              - input_number.flow_rate_import
-              - input_number.flow_rate_supply
-              - type: section
-                label: Before tracking (gap before the first snapshot)
-              - input_number.flow_bill_pre_import_kwh
-              - input_number.flow_bill_pre_hh_high_kwh
-              - input_number.flow_bill_pre_hh_low_kwh
-              - input_number.flow_bill_pre_revenue
-              - type: section
-                label: Lifetime Happy Hour totals
-              - input_number.flow_hh_high_kwh_total
-              - input_number.flow_hh_low_kwh_total
-              - input_number.flow_hh_revenue_total
-              - input_datetime.flow_hh_last_close
 
       - type: grid
         cards:
