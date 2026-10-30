@@ -17,8 +17,7 @@ linear history (squash merges only).
 
 | Check | What it does |
 |---|---|
-| `ci-ok` | Lint, test and build for this repo (see `.github/workflows/ci.yml`) |
-| `gitleaks` | Fails if a secret appears anywhere in the git history |
+| `ci-ok` | Lint, test and build for this repo, plus workflow lint (actionlint) and a full-history secret scan (gitleaks); see `.github/workflows/ci.yml` |
 | `pr-title` | PR title follows Conventional Commits |
 
 ## Local checks

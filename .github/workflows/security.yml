@@ -1,11 +1,9 @@
-# Secret scanning on every PR, every push to main and weekly across full history.
+# Weekly secret scan across the full history (and on demand). Pull requests are scanned by the
+# same gitleaks version in CI's "Repo checks" job, which ci-ok covers.
 # Uses the gitleaks CLI directly (no licence needed) with a checksum-verified download.
 name: Security
 
 on:
-  pull_request:
-  push:
-    branches: [main]
   schedule:
     - cron: "17 21 * * 0"  # Mondays 08:17 Sydney (AEDT)
   workflow_dispatch:
@@ -41,20 +39,3 @@ jobs:
           sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
       - name: Scan full git history
         run: gitleaks git . --redact --no-banner --verbose --exit-code 1
-
-  dependency-review:
-    name: dependency-review
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294  # v5.0.0
-        with:
-          fail-on-severity: high
-          comment-summary-in-pr: on-failure

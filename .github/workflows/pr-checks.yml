@@ -1,5 +1,6 @@
-# Pull request hygiene: Conventional Commit titles (they become the squash-merge
-# commit on main) and a lint of every workflow file.
+# Pull request title: Conventional Commits (it becomes the squash-merge commit on main).
+# Its own workflow because it must re-run when the title is edited. Workflow lint (actionlint)
+# runs in CI's "Repo checks" job and is covered by ci-ok.
 name: PR checks
 
 on:
@@ -39,14 +40,3 @@ jobs:
             revert
             security
           requireScope: false
-
-  actionlint:
-    name: actionlint
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Lint workflow files
-        run: docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:1.7.12 -color

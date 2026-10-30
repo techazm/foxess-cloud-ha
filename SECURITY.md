@@ -16,7 +16,7 @@ Only the latest release on `main` receives security fixes.
 
 ## How this repository is protected
 
-- Secret scanning with gitleaks on every pull request, every push to `main` and weekly
+- Secret scanning with gitleaks on every pull request (CI's "Repo checks" job) and weekly
   across the full history; the same check runs locally via `pre-commit`.
 - Dependabot alerts, one bundled dependency update PR per day, and grouped security
   update PRs as soon as an advisory is published. New major versions (all
