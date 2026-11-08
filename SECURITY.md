@@ -18,7 +18,7 @@ Only the latest release on `main` receives security fixes.
 
 - Secret scanning with gitleaks on every pull request (CI's "Repo checks" job) and weekly
   across the full history; the same check runs locally via `pre-commit`.
-- Dependabot alerts, one bundled dependency update PR per day, and grouped security
+- Dependabot alerts, one bundled dependency update PR on the 1st and 15th of each month, and grouped security
   update PRs as soon as an advisory is published. New major versions (all
   ecosystems) are reported monthly in an issue.
 - All changes reach `main` through pull requests with required checks.
