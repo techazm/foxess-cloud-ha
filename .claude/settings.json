@@ -1,0 +1,14 @@
+{
+  "extraKnownMarketplaces": {
+    "techazm": {
+      "source": {
+        "source": "github",
+        "repo": "techazm/support-tools",
+        "ref": "v1"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "techazm@techazm": true
+  }
+}

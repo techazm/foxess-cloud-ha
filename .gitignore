@@ -61,3 +61,6 @@ desktop.ini
 .mypy_cache/
 .coverage
 htmlcov/
+
+# Local code graph (graphify)
+graphify-out/
