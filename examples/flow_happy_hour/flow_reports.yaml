@@ -17,7 +17,8 @@
 # Replace "fox_ess_inverter" with your device slug, as in flow_happy_hour.yaml.
 
 input_number:
-  # Tariff (Endeavour, Oct 2026 defaults set by flow_reports_seed while 0)
+  # Tariff (Endeavour, Happy Hour Plus from 6 Nov 2026; defaults set by flow_reports_seed while 0).
+  # Rates changed? Update these, then run script.flow_hh_reprice from the change date.
   flow_rate_hh_high: { name: Happy Hour export rate up to cap, min: 0, max: 2,   step: 0.0001, mode: box, unit_of_measurement: "$/kWh" }
   flow_rate_hh_low:  { name: Happy Hour export rate above cap, min: 0, max: 2,   step: 0.0001, mode: box, unit_of_measurement: "$/kWh" }
   flow_rate_hh_cap:  { name: Happy Hour high-rate cap per day, min: 0, max: 100, step: 0.1,    mode: box, unit_of_measurement: kWh }
@@ -34,11 +35,19 @@ input_number:
   flow_bill_pre_hh_high_kwh: { name: Before tracking - Happy Hour high kWh, min: 0, max: 100000, step: 0.01, mode: box, unit_of_measurement: kWh }
   flow_bill_pre_hh_low_kwh:  { name: Before tracking - Happy Hour low kWh,  min: 0, max: 100000, step: 0.01, mode: box, unit_of_measurement: kWh }
   flow_bill_pre_revenue:     { name: Before tracking - Happy Hour revenue,  min: 0, max: 100000, step: 0.01, mode: box, unit_of_measurement: "$" }
+  # Last bill check: type the bill's figures, HA's own for the same dates show beside them
+  flow_last_bill_import_kwh:  { name: Last bill - import kWh,                 min: 0, max: 100000, step: 0.001, mode: box, unit_of_measurement: kWh }
+  flow_last_bill_hh_high_kwh: { name: Last bill - Happy Hour kWh at high rate, min: 0, max: 100000, step: 0.001, mode: box, unit_of_measurement: kWh }
+  flow_last_bill_hh_low_kwh:  { name: Last bill - Happy Hour kWh at low rate,  min: 0, max: 100000, step: 0.001, mode: box, unit_of_measurement: kWh }
+  flow_last_bill_earnings:    { name: Last bill - feed-in credit,            min: 0, max: 100000, step: 0.01,  mode: box, unit_of_measurement: "$" }
 
 input_datetime:
   flow_view_date:     { name: Report date,            has_date: true, has_time: false }
   flow_bill_start:    { name: Bill start,             has_date: true, has_time: false }
   flow_hh_last_close: { name: Happy Hour last closed, has_date: true, has_time: false }
+  # Set on bill day (the period just closed); edit to match the bill if it differs
+  flow_last_bill_start: { name: Last bill start, has_date: true, has_time: false }
+  flow_last_bill_end:   { name: Last bill end,   has_date: true, has_time: false }
 
 utility_meter:
   # Never-resetting export total (the daily sensor resets at midnight)
@@ -49,10 +58,12 @@ template:
   # Snapshot row: [import, export, hh high kWh, hh low kWh, hh $] keyed by date.
   # On start, today's row is added if missing and Happy Hour hasn't closed yet.
   # script.flow_reports_backfill adds older rows (existing rows always win).
+  # script.flow_hh_reprice re-prices the $ column of rows after a date.
   - triggers:
       - { trigger: time, at: "00:00:10", id: midnight }
       - { trigger: homeassistant, event: start, id: start }
       - { trigger: event, event_type: flow_energy_log_import, id: import }
+      - { trigger: event, event_type: flow_energy_log_reprice, id: reprice }
     sensor:
       - name: Flow energy log
         unique_id: flow_energy_log
@@ -62,6 +73,19 @@ template:
           days: >
             {% set imported = trigger.event.data.get('days', {}) if trigger.id == 'import' else {} %}
             {% set old = dict(imported, **this.attributes.get('days', {})) %}
+            {% if trigger.id == 'reprice' %}
+              {# $ += rate change x Happy Hour kWh since the start row; the start row itself is unchanged #}
+              {% set p = trigger.event.data %}{% set k0 = p.get('start', '') %}{% set base = old.get(k0) %}
+              {% set ns = namespace(d={}) %}
+              {% for k in old | list | sort %}
+                {% set r = old[k] %}
+                {% if base and k > k0 %}
+                  {% set r = r[:4] + [(r[4] + p.get('dh', 0) | float(0) * (r[2] - base[2]) + p.get('dl', 0) | float(0) * (r[3] - base[3])) | round(3)] %}
+                {% endif %}
+                {% set ns.d = dict(ns.d, **{k: r}) %}
+              {% endfor %}
+              {{ ns.d }}
+            {% else %}
             {% set today = now().date() | string %}
             {% set add = has_value('sensor.hh_import_total') and has_value('sensor.flow_export_total')
                          and (trigger.id == 'midnight' or (today not in old and now() < today_at('17:30'))) %}
@@ -74,6 +98,7 @@ template:
             {% set ns = namespace(d={}) %}
             {% for k in keys if k in keep %}{% set ns.d = dict(ns.d, **{k: new[k]}) %}{% endfor %}
             {{ ns.d }}
+            {% endif %}
 
   - sensor:
       # ---- Periods. Attribute v = {from, partial, r: [usage, export, hh high, hh low, hh $]}.
@@ -175,6 +200,8 @@ template:
           {{ ((as_timestamp(today_at()) - s) / 86400) | round(0) | int + 1 if s is number else none }}
       - { name: Flow bill usage,        unique_id: flow_bill_usage,        unit_of_measurement: kWh, device_class: energy, state: "{% set v = state_attr('sensor.flow_bill', 'v') %}{{ v.r[0] if v else none }}" }
       - { name: Flow bill peak export,  unique_id: flow_bill_peak_export,  unit_of_measurement: kWh, device_class: energy, state: "{% set v = state_attr('sensor.flow_bill', 'v') %}{{ (v.r[2] + v.r[3]) | round(2) if v else none }}" }
+      - { name: Flow bill peak export high rate, unique_id: flow_bill_hh_high_kwh, unit_of_measurement: kWh, device_class: energy, state: "{% set v = state_attr('sensor.flow_bill', 'v') %}{{ v.r[2] if v else none }}" }
+      - { name: Flow bill peak export low rate,  unique_id: flow_bill_hh_low_kwh,  unit_of_measurement: kWh, device_class: energy, state: "{% set v = state_attr('sensor.flow_bill', 'v') %}{{ v.r[3] if v else none }}" }
       - { name: Flow bill earnings,     unique_id: flow_bill_earnings,     unit_of_measurement: AUD, device_class: monetary, state: "{% set v = state_attr('sensor.flow_bill', 'v') %}{{ v.r[4] if v else none }}" }
       - { name: Flow bill usage cost,   unique_id: flow_bill_usage_cost,   unit_of_measurement: AUD, device_class: monetary, state: "{{ (states('sensor.flow_bill_usage') | float(0) * states('input_number.flow_rate_import') | float(0)) | round(2) }}" }
       - { name: Flow bill supply,       unique_id: flow_bill_supply,       unit_of_measurement: AUD, device_class: monetary, state: "{{ (states('sensor.flow_bill_days') | int(0) * states('input_number.flow_rate_supply') | float(0)) | round(2) }}" }
@@ -185,6 +212,23 @@ template:
         state: >
           {% set v = state_attr('sensor.flow_bill', 'v') %}{% set pea = states('sensor.flow_pea_30_days') %}
           {{ (v.r[0] * pea | float / 100 - v.r[4]) | round(2) if v and is_number(pea) else none }}
+      # PEA part on its own: 30-day rolling figure, not this bill's
+      - name: Flow bill PEA
+        unique_id: flow_bill_pea
+        unit_of_measurement: AUD
+        device_class: monetary
+        state: >
+          {% set v = state_attr('sensor.flow_bill', 'v') %}{% set pea = states('sensor.flow_pea_30_days') %}
+          {{ (v.r[0] * pea | float / 100) | round(2) if v and is_number(pea) else none }}
+      # Firm part (no PEA): usage at the base rate + supply - export earnings. Negative = credit
+      - name: Flow bill net before PEA
+        unique_id: flow_bill_net_before_pea
+        unit_of_measurement: AUD
+        device_class: monetary
+        state: >
+          {{ (states('sensor.flow_bill_usage_cost') | float + states('sensor.flow_bill_supply') | float
+              - states('sensor.flow_bill_earnings') | float) | round(2)
+             if has_value('sensor.flow_bill_earnings') and has_value('sensor.flow_bill_usage_cost') else none }}
       # Negative = credit
       - name: Flow bill estimate
         unique_id: flow_bill_estimate
@@ -194,6 +238,34 @@ template:
           {{ (states('sensor.flow_bill_usage_cost') | float + states('sensor.flow_bill_supply') | float
               + states('sensor.flow_bill_adjustment') | float) | round(2)
              if has_value('sensor.flow_bill_adjustment') and has_value('sensor.flow_bill_usage_cost') else none }}
+
+      # ---- Last bill check: HA's figures for the last bill's dates (start to end, inclusive).
+      # Attribute v = {from, to, partial, days, r}; none until both dates are set.
+      - name: Flow last bill check
+        unique_id: flow_last_bill_check
+        icon: mdi:receipt-text-check-outline
+        state: >
+          {% set a = states('input_datetime.flow_last_bill_start') %}{% set e = states('input_datetime.flow_last_bill_end') %}
+          {{ a ~ ' to ' ~ e if a[:2] == '20' and e[:2] == '20' else 'not set' }}
+        attributes:
+          v: >
+            {% set a = states('input_datetime.flow_last_bill_start') %}{% set e = states('input_datetime.flow_last_bill_end') %}
+            {% if a[:2] == '20' and e[:2] == '20' and a <= e %}
+              {% set log = state_attr('sensor.flow_energy_log', 'days') or {} %}
+              {% set keys = log | list | sort %}
+              {% set live = [states('sensor.hh_import_total') | float(0), states('sensor.flow_export_total') | float(0),
+                             states('input_number.flow_hh_high_kwh_total') | float(0), states('input_number.flow_hh_low_kwh_total') | float(0),
+                             states('input_number.flow_hh_revenue_total') | float(0)] %}
+              {% set b = (strptime(e, '%Y-%m-%d') + timedelta(days=1)).date() | string %}
+              {% set ka = keys | select('>=', a) | first | default('') %}
+              {% set kb = keys | select('>=', b) | first | default('') %}
+              {% if ka and ka < b %}
+                {% set A = log[ka] %}{% set B = log[kb] if kb else live %}
+                {% set ns = namespace(r=[]) %}{% for i in range(5) %}{% set ns.r = ns.r + [(B[i] - A[i]) | round(2)] %}{% endfor %}
+                {{ {'from': ka, 'to': kb or 'now', 'partial': ka != a or kb != b,
+                    'days': (strptime(b, '%Y-%m-%d') - strptime(a, '%Y-%m-%d')).days, 'r': ns.r} }}
+              {% else %}{{ none }}{% endif %}
+            {% else %}{{ none }}{% endif %}
 
       # ---- Bill forecast: through yesterday + last-14-complete-days average x days left
       # (incl. today). Period ends the day before the next bill day (or a month after
@@ -381,6 +453,49 @@ script:
             {{ 'Added ' ~ (k | count) ~ ' days, ' ~ k[0] ~ ' to ' ~ k[-1] ~ '.' if k else 'Nothing to add: no statistics found before ' ~ first ~ '.' }}
             Days without a Happy Hour reading stop the backfill.
 
+  # Rates changed but nights were closed at the old ones (e.g. Happy Hour Plus,
+  # 35c -> 40c from 6 Nov 2026): set the new rates first, then run this with the
+  # first day at the new rates and the rates the nights were counted at. The
+  # lifetime $ total and every snapshot after that day move together, so the
+  # Days, Months and Bill tabs all agree. Nights before the oldest snapshot and
+  # the flow_bill_pre_* helpers are not changed.
+  flow_hh_reprice:
+    alias: Flow reports - re-price Happy Hour since a date
+    mode: single
+    fields:
+      from_date: { description: First day at the new rates, example: "2026-11-06", required: true, selector: { date: {} } }
+      high_was: { description: High rate those nights were counted at ($/kWh), example: 0.35, required: true, selector: { number: { min: 0, max: 2, step: 0.0001, mode: box } } }
+      low_was:  { description: Low rate those nights were counted at ($/kWh),  example: 0.10, required: true, selector: { number: { min: 0, max: 2, step: 0.0001, mode: box } } }
+    sequence:
+      - variables:
+          log: "{{ state_attr('sensor.flow_energy_log', 'days') or {} }}"
+          k0: "{{ log | list | sort | select('>=', from_date | string) | first | default('') }}"
+      - if: "{{ not k0 }}"
+        then:
+          - action: notify.notify
+            data:
+              title: Flow reports re-price
+              message: "No snapshot on or after {{ from_date }} yet, nothing changed. Edit the lifetime Happy Hour revenue by hand for tonight."
+          - stop: No snapshot
+      - variables:
+          dh: "{{ (states('input_number.flow_rate_hh_high') | float(0) - high_was | float(0)) | round(4) }}"
+          dl: "{{ (states('input_number.flow_rate_hh_low') | float(0) - low_was | float(0)) | round(4) }}"
+          delta: >
+            {{ (dh * (states('input_number.flow_hh_high_kwh_total') | float(0) - log[k0][2])
+                + dl * (states('input_number.flow_hh_low_kwh_total') | float(0) - log[k0][3])) | round(2) }}
+      - event: flow_energy_log_reprice
+        event_data: { start: "{{ k0 }}", dh: "{{ dh }}", dl: "{{ dl }}" }
+      - action: input_number.set_value
+        target: { entity_id: input_number.flow_hh_revenue_total }
+        data: { value: "{{ (states('input_number.flow_hh_revenue_total') | float(0) + delta) | round(2) }}" }
+      - action: notify.notify
+        data:
+          title: Flow reports re-price
+          message: >
+            Happy Hour since {{ k0 }} re-priced at {{ states('input_number.flow_rate_hh_high') }} / {{ states('input_number.flow_rate_hh_low') }} $/kWh:
+            {{ '%+.2f' | format(delta | float) }} $.{% if k0 != from_date | string %} Nights {{ from_date }} to the day before {{ k0 }} have no snapshot and weren't changed.{% endif %}
+            Run it once per change: running again adds the difference again.
+
 automation:
   # Default rates while still 0; report date and bill start if not set yet
   - id: flow_reports_seed
@@ -391,10 +506,10 @@ automation:
     actions:
       - repeat:
           for_each:
-            - { entity: input_number.flow_rate_hh_high, value: 0.35 }
+            - { entity: input_number.flow_rate_hh_high, value: 0.40 }
             - { entity: input_number.flow_rate_hh_low,  value: 0.10 }
             - { entity: input_number.flow_rate_hh_cap,  value: 15 }
-            - { entity: input_number.flow_rate_import,  value: 0.4226 }
+            - { entity: input_number.flow_rate_import,  value: 0.42256 }
             - { entity: input_number.flow_rate_supply,  value: 2.2256 }
           sequence:
             - if: "{{ states(repeat.item.entity) | float(0) == 0 }}"
@@ -501,6 +616,13 @@ automation:
             usage {{ states('sensor.flow_bill_usage') }} kWh, Happy Hour {{ states('sensor.flow_bill_peak_export') }} kWh / ${{ states('sensor.flow_bill_earnings') }},
             estimated bill ${{ (states('sensor.flow_bill_estimate') | float(0) - states('input_number.flow_rate_supply') | float(0)) | round(2) }} (negative = credit).
             If the bill's dates differ, set the bill start to match: figures recalculate.
+            When the bill arrives, type its figures into the Last bill helpers (Bill tab) to check HA against it.
+      - action: input_datetime.set_datetime
+        target: { entity_id: input_datetime.flow_last_bill_start }
+        data: { date: "{{ states('input_datetime.flow_bill_start') }}" }
+      - action: input_datetime.set_datetime
+        target: { entity_id: input_datetime.flow_last_bill_end }
+        data: { date: "{{ (now() - timedelta(days=1)).date() }}" }
       - action: input_datetime.set_datetime
         target: { entity_id: input_datetime.flow_bill_start }
         data: { date: "{{ now().date() }}" }

@@ -35,7 +35,7 @@ input_boolean:
 
 input_number:
   hh_battery_usable_kwh:   { name: Battery usable kWh,          min: 10, max: 60,  step: 0.5, initial: 38,   unit_of_measurement: kWh }
-  hh_cap_kwh:              { name: Happy Hour 35c cap,          min: 0,  max: 30,  step: 0.5, initial: 15,   unit_of_measurement: kWh }
+  hh_cap_kwh:              { name: Happy Hour high-rate cap,    min: 0,  max: 30,  step: 0.5, initial: 15,   unit_of_measurement: kWh }
   hh_fd_power_w:           { name: Force discharge power,       min: 1000, max: 10500, step: 100, initial: 10000, unit_of_measurement: W }
   hh_floor_soc:            { name: Hard floor SoC (inverter),   min: 10, max: 50,  step: 1,   initial: 10,   unit_of_measurement: "%" }
   hh_morning_target_soc:   { name: Planned minimum SoC at 08:00, min: 10, max: 80, step: 1,   initial: 40,   unit_of_measurement: "%" }
@@ -169,7 +169,7 @@ automation:
       - action: button.press
         target: { entity_id: button.fox_ess_inverter_refresh_all_data }
 
-  # 35c cap reached - keep selling at 10c only with real surplus (write 2)
+  # High-rate cap reached - keep selling at 10c only with real surplus (write 2)
   # Daily feed-in updates every ~15 min, so this can overshoot the cap by ~1 kWh (sold at 10c).
   - id: hh_cap_reached
     alias: Happy Hour - 35c cap reached
@@ -192,11 +192,11 @@ automation:
             data: { fd_enabled: false, fd_soc: 100, fd_power: 0 }
           - action: notify.notify
             data:
-              message: "35c cap hit ({{ states('sensor.hh_export_window') }} kWh). Stopped export, holding {{ states('sensor.fox_ess_inverter_battery_soc') }}%."
+              message: "High-rate cap hit ({{ states('sensor.hh_export_window') }} kWh). Stopped export, holding {{ states('sensor.fox_ess_inverter_battery_soc') }}%."
         else:
           - action: notify.notify
             data:
-              message: "35c cap hit. Surplus {{ states('sensor.hh_surplus_kwh') }} kWh - selling down to {{ states('sensor.hh_reserve_soc') }}% at 10c."
+              message: "High-rate cap hit. Surplus {{ states('sensor.hh_surplus_kwh') }} kWh - selling down to {{ states('sensor.hh_reserve_soc') }}% at 10c."
 
   # 21:30 - snapshot meters for overnight learning
   - id: hh_snapshot_night

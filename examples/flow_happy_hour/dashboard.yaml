@@ -168,7 +168,11 @@ views:
           - { type: tile, entity: sensor.flow_bill_usage_cost, name: Usage charge, icon: mdi:cash-minus, color: deep-orange, grid_options: { columns: 6 } }
           - { type: tile, entity: sensor.flow_bill_peak_export, name: Exported 5:30-9:30pm, icon: mdi:transmission-tower-export, color: blue, grid_options: { columns: 6 } }
           - { type: tile, entity: sensor.flow_bill_supply, name: Supply charge, icon: mdi:cash-minus, color: deep-orange, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_bill_hh_high_kwh, name: Exported at high rate, icon: mdi:cash-fast, color: blue, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_bill_hh_low_kwh, name: Exported at low rate, icon: mdi:cash, color: light-blue, grid_options: { columns: 6 } }
           - { type: tile, entity: sensor.flow_bill_earnings, name: Export earnings, icon: mdi:cash-plus, color: blue, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_bill_pea, name: PEA (30-day, provisional), icon: mdi:chart-bell-curve, color: grey, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_bill_net_before_pea, name: Net before PEA, icon: mdi:scale-balance, color: indigo, grid_options: { columns: 6 } }
           - { type: tile, entity: sensor.flow_bill_adjustment, name: Total adjustment, icon: mdi:scale-balance, color: blue, grid_options: { columns: 6 } }
           - { type: tile, entity: sensor.flow_bill_estimate, name: Estimated bill (negative = credit), icon: mdi:receipt-text-outline, color: indigo }
           - type: markdown
@@ -176,8 +180,11 @@ views:
               {% set v = state_attr('sensor.flow_bill', 'v') %}
               {% if v and v.from == 'none' %}**No snapshot yet:** run *Backfill from history* below.
               {% elif v and v.partial %}**Part period:** tracking from {{ v.from }}; fill the "Before tracking" helpers for the days before.{% endif %}
-              _Estimated bill = usage x {{ (states('input_number.flow_rate_import') | float(0) * 100) | round(2) }}c
-              + supply + total adjustment. PEA is the 30-day figure ({{ states('sensor.flow_pea_30_days') }}c/kWh), not this bill's._
+              _Rates: export {{ (states('input_number.flow_rate_hh_high') | float(0) * 100) | round(2) }}c for the first
+              {{ states('input_number.flow_rate_hh_cap') | float(0) | round(1) }} kWh/day 5:30-9:30pm, then {{ (states('input_number.flow_rate_hh_low') | float(0) * 100) | round(2) }}c;
+              import {{ (states('input_number.flow_rate_import') | float(0) * 100) | round(3) }}c; supply ${{ states('input_number.flow_rate_supply') }}/day.
+              Net before PEA = usage charge + supply - export earnings. Estimated bill = net before PEA + PEA.
+              PEA uses Flow's 30-day rolling figure ({{ states('sensor.flow_pea_30_days') }}c/kWh), not this bill's, so it moves until the bill arrives._
           - type: heading
             heading: Forecast for this bill
           - { type: tile, entity: sensor.flow_bill_forecast_total, name: Forecast bill (negative = credit), icon: mdi:crystal-ball, color: indigo }
@@ -198,6 +205,29 @@ views:
       - type: grid
         cards:
           - type: heading
+            heading: Last bill check
+          - type: markdown
+            content: |
+              {% set v = state_attr('sensor.flow_last_bill_check', 'v') -%}
+              {% if not v -%}
+              Set the last bill's start and end below (filled in automatically on bill day), then type its figures.
+              {%- else -%}
+              **{{ as_timestamp(states('input_datetime.flow_last_bill_start') ~ 'T12:00:00') | timestamp_custom('%-d %b') }} -
+              {{ as_timestamp(states('input_datetime.flow_last_bill_end') ~ 'T12:00:00') | timestamp_custom('%-d %b %Y') }}** ({{ v.days }} days)
+
+              | | Bill | Home Assistant | Diff |
+              |:--|--:|--:|--:|
+              {% for label, ent, i, u in [('Import', 'input_number.flow_last_bill_import_kwh', 0, ' kWh'),
+                                         ('Happy Hour, high rate', 'input_number.flow_last_bill_hh_high_kwh', 2, ' kWh'),
+                                         ('Happy Hour, low rate', 'input_number.flow_last_bill_hh_low_kwh', 3, ' kWh'),
+                                         ('Feed-in credit', 'input_number.flow_last_bill_earnings', 4, ' AUD')] -%}
+              {% set bill = states(ent) | float(0) %}{% set ha = v.r[i] -%}
+              | {{ label }} | {{ bill | round(2) ~ u if bill else '-' }} | {{ ha | round(2) ~ u }} | {{ ('%+.1f%%' | format((ha - bill) / bill * 100)) if bill else '-' }} |
+              {% endfor %}
+              {% if v.partial %}_HA's figures are partial: snapshots run {{ v.from }} to {{ v.to }}. Run *Backfill from history* for older days._
+              {% endif %}_kWh match but the credit doesn't? The rates changed during the period: run *Re-price Happy Hour* below._
+              {%- endif %}
+          - type: heading
             heading: Settings
           - type: entities
             state_color: false
@@ -205,6 +235,9 @@ views:
               - entity: script.flow_reports_backfill
                 name: Backfill from history (one-off, fills days before tracking)
                 icon: mdi:history
+              - entity: script.flow_hh_reprice
+                name: Re-price Happy Hour since a date (after a rate change)
+                icon: mdi:cash-sync
               - type: section
                 label: Rates
               - input_number.flow_rate_hh_high
@@ -218,6 +251,14 @@ views:
               - input_number.flow_bill_pre_hh_high_kwh
               - input_number.flow_bill_pre_hh_low_kwh
               - input_number.flow_bill_pre_revenue
+              - type: section
+                label: Last bill (type from the bill)
+              - input_datetime.flow_last_bill_start
+              - input_datetime.flow_last_bill_end
+              - input_number.flow_last_bill_import_kwh
+              - input_number.flow_last_bill_hh_high_kwh
+              - input_number.flow_last_bill_hh_low_kwh
+              - input_number.flow_last_bill_earnings
               - type: section
                 label: Lifetime Happy Hour totals
               - input_number.flow_hh_high_kwh_total
@@ -246,7 +287,7 @@ views:
               {% if is_state('input_boolean.hh_enabled', 'off') %}**Optimiser off** - the inverter runs whatever schedule is set.
               {% elif t < '17:20' %}Arms at **17:20** with cut-off **{{ res | int }}%**.
               {% elif t < '17:30' %}Armed: force discharge from 17:30 down to **{{ cut | int }}%**.
-              {% elif t < '21:30' %}{% if exp < cap %}Discharging to **{{ cut | int }}%**, {{ (cap - exp) | round(1) }} kWh left at 35c.{% else %}35c cap reached ({{ exp | round(1) }} kWh).{% endif %}
+              {% elif t < '21:30' %}{% if exp < cap %}Discharging to **{{ cut | int }}%**, {{ (cap - exp) | round(1) }} kWh left at the high rate.{% else %}High-rate cap reached ({{ exp | round(1) }} kWh).{% endif %}
               {% else %}Self-use overnight. 08:00 target **{{ states('input_number.hh_morning_target_soc') | int }}%**.{% endif %}
               {% if is_state('input_boolean.hh_dry_run', 'on') %}_(dry run: no inverter writes)_{% endif %}
 
@@ -306,7 +347,7 @@ views:
               - entity: sensor.hh_export_window
                 name: Export since 17:30
               - entity: input_number.hh_cap_kwh
-                name: 35c cap
+                name: High-rate cap
           - type: history-graph
             title: Wholesale price (48 h)
             hours_to_show: 48
