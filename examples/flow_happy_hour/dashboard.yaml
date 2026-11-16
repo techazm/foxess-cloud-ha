@@ -168,8 +168,8 @@ views:
           - { type: tile, entity: sensor.flow_bill_usage_cost, name: Usage charge, icon: mdi:cash-minus, color: deep-orange, grid_options: { columns: 6 } }
           - { type: tile, entity: sensor.flow_bill_peak_export, name: Exported 5:30-9:30pm, icon: mdi:transmission-tower-export, color: blue, grid_options: { columns: 6 } }
           - { type: tile, entity: sensor.flow_bill_supply, name: Supply charge, icon: mdi:cash-minus, color: deep-orange, grid_options: { columns: 6 } }
-          - { type: tile, entity: sensor.flow_bill_hh_high_kwh, name: Exported at high rate, icon: mdi:cash-fast, color: blue, grid_options: { columns: 6 } }
-          - { type: tile, entity: sensor.flow_bill_hh_low_kwh, name: Exported at low rate, icon: mdi:cash, color: light-blue, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_bill_peak_export_high_rate, name: Exported at high rate, icon: mdi:cash-fast, color: blue, grid_options: { columns: 6 } }
+          - { type: tile, entity: sensor.flow_bill_peak_export_low_rate, name: Exported at low rate, icon: mdi:cash, color: light-blue, grid_options: { columns: 6 } }
           - { type: tile, entity: sensor.flow_bill_earnings, name: Export earnings, icon: mdi:cash-plus, color: blue, grid_options: { columns: 6 } }
           - { type: tile, entity: sensor.flow_bill_pea, name: PEA (30-day, provisional), icon: mdi:chart-bell-curve, color: grey, grid_options: { columns: 6 } }
           - { type: tile, entity: sensor.flow_bill_net_before_pea, name: Net before PEA, icon: mdi:scale-balance, color: indigo, grid_options: { columns: 6 } }
@@ -225,7 +225,7 @@ views:
               | {{ label }} | {{ bill | round(2) ~ u if bill else '-' }} | {{ ha | round(2) ~ u }} | {{ ('%+.1f%%' | format((ha - bill) / bill * 100)) if bill else '-' }} |
               {% endfor %}
               {% if v.partial %}_HA's figures are partial: snapshots run {{ v.from }} to {{ v.to }}. Run *Backfill from history* for older days._
-              {% endif %}_kWh match but the credit doesn't? The rates changed during the period: run *Re-price Happy Hour* below._
+              {% endif %}{% if states('input_number.flow_last_bill_earnings') | float(0) > 0 %}_kWh match but the credit doesn't? The rates changed during the period: run *Re-price Happy Hour* below._{% endif %}
               {%- endif %}
           - type: heading
             heading: Settings

@@ -246,11 +246,12 @@ template:
         icon: mdi:receipt-text-check-outline
         state: >
           {% set a = states('input_datetime.flow_last_bill_start') %}{% set e = states('input_datetime.flow_last_bill_end') %}
-          {{ a ~ ' to ' ~ e if a[:2] == '20' and e[:2] == '20' else 'not set' }}
+          {{ a ~ ' to ' ~ e if a[:2] == '20' and e[:2] == '20' and a < e else 'not set' }}
         attributes:
           v: >
             {% set a = states('input_datetime.flow_last_bill_start') %}{% set e = states('input_datetime.flow_last_bill_end') %}
-            {% if a[:2] == '20' and e[:2] == '20' and a <= e %}
+            {# Date helpers start at today: start == end means not set yet #}
+            {% if a[:2] == '20' and e[:2] == '20' and a < e %}
               {% set log = state_attr('sensor.flow_energy_log', 'days') or {} %}
               {% set keys = log | list | sort %}
               {% set live = [states('sensor.hh_import_total') | float(0), states('sensor.flow_export_total') | float(0),
