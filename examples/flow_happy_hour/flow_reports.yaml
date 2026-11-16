@@ -26,7 +26,7 @@ input_number:
   flow_rate_supply:  { name: Daily supply charge,             min: 0, max: 10,  step: 0.0001, mode: box, unit_of_measurement: "$/day" }
   # 0 = unknown (no auto-advance). Learned when you set the bill start by hand.
   flow_bill_day:     { name: Bill day of month (0 = unknown), min: 0, max: 31,  step: 1,      mode: box }
-  # Lifetime Happy Hour totals (never reset; written at 21:30)
+  # Lifetime Happy Hour totals (never reset; written at 22:30)
   flow_hh_high_kwh_total: { name: Happy Hour kWh at high rate (lifetime), min: 0, max: 10000000, step: 0.01, mode: box, unit_of_measurement: kWh }
   flow_hh_low_kwh_total:  { name: Happy Hour kWh at low rate (lifetime),  min: 0, max: 10000000, step: 0.01, mode: box, unit_of_measurement: kWh }
   flow_hh_revenue_total:  { name: Happy Hour revenue (lifetime),          min: 0, max: 10000000, step: 0.01, mode: box, unit_of_measurement: "$" }
@@ -544,19 +544,23 @@ automation:
         target: { entity_id: input_datetime.flow_view_date }
         data: { date: "{{ now().date() }}" }
 
-  # 21:30 - refresh, then add tonight's Happy Hour to the lifetime totals (once per window)
+  # 22:30 - refresh, then add tonight's Happy Hour to the lifetime totals (once per window).
+  # Not 21:30: daily feed-in is the sum of the cloud's hourly buckets, polled every
+  # ~15 min, so at 21:30 the end of the window isn't in yet (the first bill showed
+  # HA ~2.5 kWh a night short). After 21:29 the inverter is in Self-use with no
+  # sun, so the counter only gains the late-arriving window export.
   - id: flow_bill_close_happy_hour
     alias: Flow bill - add Happy Hour
     mode: single
     triggers:
-      - { trigger: time, at: "21:30:00" }
-      # Catch-up if HA was down at 21:30. Only before 06:00, while the window
+      - { trigger: time, at: "22:30:00" }
+      # Catch-up if HA was down at 22:30. Only before 06:00, while the window
       # counter can't yet hold 0c morning solar export.
       - { trigger: homeassistant, event: start }
     variables:
       window_day: "{{ (now() if now() >= today_at('17:30') else now() - timedelta(days=1)).date() | string }}"
     conditions:
-      - "{{ now() >= today_at('21:30') or now() < today_at('06:00') }}"
+      - "{{ now() >= today_at('22:30') or now() < today_at('06:00') }}"
       - "{{ states('input_datetime.flow_hh_last_close') != window_day }}"
     actions:
       - action: button.press

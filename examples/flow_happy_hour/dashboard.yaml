@@ -70,7 +70,7 @@ views:
               {% set v = state_attr('sensor.flow_day', 'v') %}
               {% if v and v.from == 'none' %}**No snapshot yet** for this day: the first is taken at midnight, or run *Backfill from history* (Bill tab).
               {% elif v and v.partial %}**No full data for this day** (tracking from {{ v.from }}; run *Backfill from history* on the Bill tab).{% endif %}
-              _Today's Happy Hour is added at 21:30. PEA is Flow's provisional 30-day figure, not this day's;
+              _Today's Happy Hour is added at 22:30. PEA is Flow's provisional 30-day figure, not this day's;
               total adjustment = usage x PEA - export earnings (negative = credit)._
       - type: grid
         cards:
