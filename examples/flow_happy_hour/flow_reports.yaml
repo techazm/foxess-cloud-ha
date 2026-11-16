@@ -465,8 +465,8 @@ script:
     mode: single
     fields:
       from_date: { description: First day at the new rates, example: "2026-11-06", required: true, selector: { date: {} } }
-      high_was: { description: High rate those nights were counted at ($/kWh), example: 0.35, required: true, selector: { number: { min: 0, max: 2, step: 0.0001, mode: box } } }
-      low_was:  { description: Low rate those nights were counted at ($/kWh),  example: 0.10, required: true, selector: { number: { min: 0, max: 2, step: 0.0001, mode: box } } }
+      high_was: { description: High rate those nights were counted at ($/kWh), example: 0.35, required: true, selector: { number: { min: 0, max: 2, step: any, mode: box } } }
+      low_was:  { description: Low rate those nights were counted at ($/kWh),  example: 0.10, required: true, selector: { number: { min: 0, max: 2, step: any, mode: box } } }
     sequence:
       - variables:
           log: "{{ state_attr('sensor.flow_energy_log', 'days') or {} }}"
