@@ -61,6 +61,8 @@ Live / Days / Months / Bill need `flow_reports.yaml`; PEA and price tiles need `
 
 The logbook uses automation entity IDs derived from the aliases (e.g. `automation.happy_hour_arm_tonight`). If you renamed them, update the list.
 
+The Bill tab's script rows use `script.flow_reports_backfill` and `script.flow_hh_reprice`. Newer HA versions name a new script's entity after its alias instead (e.g. `script.flow_reports_re_price_happy_hour_since_a_date`). If a row says *Entity not found*, set that script's Entity ID in Settings -> Entities (or change the dashboard to the ID HA chose). The scripts can always be run as actions under their own names (`script.flow_hh_reprice`).
+
 ## Tuning
 | Setting | Default | When to change |
 |---|---|---|
